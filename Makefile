@@ -9,7 +9,7 @@ IMG ?= $(IMG_REPO):$(TAG)
 PLATFORMS ?= linux/amd64,linux/arm64
 
 CHART := chart/address-controller
-# Chart.yaml carries a 0.0.0 placeholder; the real version is stamped here.
+# Override to package a different version than the one in Chart.yaml.
 CHART_VERSION ?= 0.1.0
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
