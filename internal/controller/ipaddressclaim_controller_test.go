@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {

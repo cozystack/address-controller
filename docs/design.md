@@ -9,7 +9,7 @@
 This document records the contract: the resource model, the two state
 machines the core drives, the exact reconciliation algorithms, and the
 obligations a per-class driver must meet. It is the reference against which
-drivers (such as [metallb-iad](https://github.com/lllamnyp/metallb-iad))
+drivers (such as [metallb-iad](https://github.com/cozystack/metallb-iad))
 are written.
 
 ## 1. Scope

@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
 
 // IPAddressClaimReconciler owns the class-agnostic claim lifecycle: resolving

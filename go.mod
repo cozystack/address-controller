@@ -1,4 +1,4 @@
-module github.com/lllamnyp/address-controller
+module github.com/cozystack/address-controller
 
 go 1.23.0
 

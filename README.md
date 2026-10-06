@@ -10,7 +10,7 @@ analogue), which live in separate projects.
 **The full contract — state machines, reconciliation algorithms, field
 ownership, and driver obligations — is specified in
 [docs/design.md](docs/design.md).** The reference driver implementing it is
-[metallb-iad](https://github.com/lllamnyp/metallb-iad).
+[metallb-iad](https://github.com/cozystack/metallb-iad).
 
 ## Resource model
 
@@ -96,7 +96,7 @@ cluster. `helm uninstall` leaves the CRDs (and every `IPAddress` ledger
 entry) behind by design.
 
 The controller image is published as
-`ghcr.io/lllamnyp/address-controller:main` (plus `main-<sha>` and semver tags)
+`ghcr.io/cozystack/address-controller:main` (plus `main-<sha>` and semver tags)
 by the release workflow on every push to main.
 
 ## Development
@@ -106,6 +106,6 @@ make manifests generate   # regenerate CRDs, ClusterRole, and deepcopy after API
 make build                # build the manager
 go test ./internal/controller/
 make run                  # run the controller locally
-make docker-build docker-push   # publish ghcr.io/lllamnyp/address-controller:<git-sha>
+make docker-build docker-push   # publish ghcr.io/cozystack/address-controller:<git-sha>
 make helm-package         # lint and package the chart into dist/
 ```

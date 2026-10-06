@@ -38,8 +38,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
-	"github.com/lllamnyp/address-controller/internal/controller"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
+	"github.com/cozystack/address-controller/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

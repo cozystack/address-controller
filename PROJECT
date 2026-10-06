@@ -6,14 +6,14 @@ domain: sdn.cozystack.io
 layout:
 - go.kubebuilder.io/v4
 projectName: address-controller
-repo: github.com/lllamnyp/address-controller
+repo: github.com/cozystack/address-controller
 resources:
 - api:
     crdVersion: v1
   domain: sdn.cozystack.io
   group: local
   kind: IPAddressClass
-  path: github.com/lllamnyp/address-controller/api/v1alpha1
+  path: github.com/cozystack/address-controller/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -21,7 +21,7 @@ resources:
   domain: sdn.cozystack.io
   group: local
   kind: IPAddress
-  path: github.com/lllamnyp/address-controller/api/v1alpha1
+  path: github.com/cozystack/address-controller/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -30,6 +30,6 @@ resources:
   domain: sdn.cozystack.io
   group: local
   kind: IPAddressClaim
-  path: github.com/lllamnyp/address-controller/api/v1alpha1
+  path: github.com/cozystack/address-controller/api/v1alpha1
   version: v1alpha1
 version: "3"
