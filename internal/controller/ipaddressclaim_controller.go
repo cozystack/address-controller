@@ -371,7 +371,7 @@ func (r *IPAddressClaimReconciler) updateClaimStatus(ctx context.Context, claim 
 	previous := claim.Status.Phase
 
 	sort.Slice(bound, func(i, j int) bool { return bound[i].Name < bound[j].Name })
-	var reported []localv1alpha1.BoundAddress
+	reported := make([]localv1alpha1.BoundAddress, 0, len(bound))
 	for _, addr := range bound {
 		reported = append(reported, localv1alpha1.BoundAddress{Name: addr.Name, Address: addr.Spec.Address})
 	}
