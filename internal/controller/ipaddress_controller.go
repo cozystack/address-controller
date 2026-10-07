@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Timofei Larkin.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
 
 // IPAddressReconciler owns the class-agnostic address lifecycle: deletion

@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Timofei Larkin.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -31,7 +31,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
+)
+
+const (
+	testClassName   = "public"
+	testProvisioner = "metallb.drivers.local.sdn.cozystack.io"
+	testNamespace   = "tenant-a"
+	testClaimName   = "web"
+	testClaimUID    = "claim-uid-1"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -70,20 +78,20 @@ func claimReconciler(c client.Client) *IPAddressClaimReconciler {
 	}
 }
 
-func reconcileClaim(t *testing.T, r *IPAddressClaimReconciler, namespace, name string) {
+func reconcileClaim(t *testing.T, r *IPAddressClaimReconciler) {
 	t.Helper()
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: name},
+		NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: testClaimName},
 	})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 }
 
-func getClaim(t *testing.T, c client.Client, namespace, name string) *localv1alpha1.IPAddressClaim {
+func getClaim(t *testing.T, c client.Client) *localv1alpha1.IPAddressClaim {
 	t.Helper()
 	claim := &localv1alpha1.IPAddressClaim{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, claim); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testClaimName}, claim); err != nil {
 		t.Fatalf("get claim: %v", err)
 	}
 	return claim
@@ -100,17 +108,21 @@ func getAddress(t *testing.T, c client.Client, name string) *localv1alpha1.IPAdd
 
 func publicClass(annotations map[string]string) *localv1alpha1.IPAddressClass {
 	return &localv1alpha1.IPAddressClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "public", Annotations: annotations},
+		ObjectMeta: metav1.ObjectMeta{Name: testClassName, Annotations: annotations},
 		Spec: localv1alpha1.IPAddressClassSpec{
-			Provisioner:   "metallb.drivers.local.sdn.cozystack.io",
+			Provisioner:   testProvisioner,
 			ReclaimPolicy: localv1alpha1.ReclaimRetain,
 		},
 	}
 }
 
+func defaultClass() *localv1alpha1.IPAddressClass {
+	return publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: "true"})
+}
+
 func pendingClaim(className string) *localv1alpha1.IPAddressClaim {
 	return &localv1alpha1.IPAddressClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "tenant-a", UID: "claim-uid-1"},
+		ObjectMeta: metav1.ObjectMeta{Name: testClaimName, Namespace: testNamespace, UID: testClaimUID},
 		Spec: localv1alpha1.IPAddressClaimSpec{
 			ClassName: className,
 			Family:    localv1alpha1.FamilyIPv4,
@@ -119,17 +131,17 @@ func pendingClaim(className string) *localv1alpha1.IPAddressClaim {
 }
 
 func TestClaimResolvesClassAndWaitsForProvisioner(t *testing.T) {
-	c := testClient(t, publicClass(nil), pendingClaim("public"))
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	c := testClient(t, publicClass(nil), pendingClaim(testClassName))
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	if claim.Status.Phase != localv1alpha1.ClaimPending {
 		t.Errorf("phase = %q, want Pending", claim.Status.Phase)
 	}
-	if got := claim.Annotations[localv1alpha1.ProvisionerAnnotation]; got != "metallb.drivers.local.sdn.cozystack.io" {
+	if got := claim.Annotations[localv1alpha1.ProvisionerAnnotation]; got != testProvisioner {
 		t.Errorf("provisioner annotation = %q", got)
 	}
-	if claim.Status.ClassName != "public" {
+	if claim.Status.ClassName != testClassName {
 		t.Errorf("status.className = %q", claim.Status.ClassName)
 	}
 	if !hasFinalizer(claim.Finalizers, localv1alpha1.ClaimProtectionFinalizer) {
@@ -143,21 +155,21 @@ func TestClaimResolvesClassAndWaitsForProvisioner(t *testing.T) {
 
 func TestClaimUsesDefaultClass(t *testing.T) {
 	c := testClient(t,
-		publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: "true"}),
+		defaultClass(),
 		pendingClaim(""))
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
-	if claim.Status.ClassName != "public" {
+	claim := getClaim(t, c)
+	if claim.Status.ClassName != testClassName {
 		t.Errorf("status.className = %q, want public (the default class)", claim.Status.ClassName)
 	}
 }
 
 func TestClaimWithoutAnyDefaultClassStaysPending(t *testing.T) {
 	c := testClient(t, publicClass(nil), pendingClaim(""))
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	cond := meta.FindStatusCondition(claim.Status.Conditions, localv1alpha1.ConditionClassResolved)
 	if cond == nil || cond.Reason != localv1alpha1.ReasonNoDefaultClass {
 		t.Errorf("ClassResolved condition = %+v, want reason NoDefaultClass", cond)
@@ -165,15 +177,15 @@ func TestClaimWithoutAnyDefaultClassStaysPending(t *testing.T) {
 }
 
 func TestClaimWithMultipleDefaultClassesStaysPending(t *testing.T) {
-	second := publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: "true"})
+	second := defaultClass()
 	second.Name = "public-2"
 	c := testClient(t,
-		publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: "true"}),
+		defaultClass(),
 		second,
 		pendingClaim(""))
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	cond := meta.FindStatusCondition(claim.Status.Conditions, localv1alpha1.ConditionClassResolved)
 	if cond == nil || cond.Reason != localv1alpha1.ReasonMultipleDefaultClasses {
 		t.Errorf("ClassResolved condition = %+v, want reason MultipleDefaultClasses", cond)
@@ -184,24 +196,24 @@ func TestClaimAcceptsDriverPreBoundAddress(t *testing.T) {
 	addr := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-203-0-113-7"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "203.0.113.7",
 			// Driver pre-binds without a UID; the core controller completes it.
-			ClaimRef: &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web"},
+			ClaimRef: &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName},
 			Source:   localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 	}
-	c := testClient(t, publicClass(nil), pendingClaim("public"), addr)
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	c := testClient(t, publicClass(nil), pendingClaim(testClassName), addr)
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	if claim.Status.Phase != localv1alpha1.ClaimBound {
 		t.Fatalf("phase = %q, want Bound", claim.Status.Phase)
 	}
 	if len(claim.Status.Addresses) != 1 || claim.Status.Addresses[0].Address != "203.0.113.7" {
 		t.Errorf("status.addresses = %+v", claim.Status.Addresses)
 	}
-	if got := getAddress(t, c, "ip-203-0-113-7").Spec.ClaimRef.UID; got != "claim-uid-1" {
+	if got := getAddress(t, c, "ip-203-0-113-7").Spec.ClaimRef.UID; got != testClaimUID {
 		t.Errorf("claimRef.uid = %q, want completed to claim-uid-1", got)
 	}
 }
@@ -210,21 +222,21 @@ func TestClaimMatchesAvailableAddress(t *testing.T) {
 	addr := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-203-0-113-8"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "203.0.113.8",
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressAvailable},
 	}
-	c := testClient(t, publicClass(nil), pendingClaim("public"), addr)
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	c := testClient(t, publicClass(nil), pendingClaim(testClassName), addr)
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	if claim.Status.Phase != localv1alpha1.ClaimBound {
 		t.Fatalf("phase = %q, want Bound", claim.Status.Phase)
 	}
 	ref := getAddress(t, c, "ip-203-0-113-8").Spec.ClaimRef
-	if ref == nil || ref.Namespace != "tenant-a" || ref.Name != "web" || ref.UID != "claim-uid-1" {
+	if ref == nil || ref.Namespace != testNamespace || ref.Name != testClaimName || ref.UID != testClaimUID {
 		t.Errorf("claimRef = %+v", ref)
 	}
 }
@@ -242,27 +254,27 @@ func TestClaimIgnoresAvailableAddressOfWrongClassOrFamily(t *testing.T) {
 	wrongFamily := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-wrong-family"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "2001:db8::9",
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressAvailable},
 	}
-	c := testClient(t, publicClass(nil), pendingClaim("public"), wrongClass, wrongFamily)
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	c := testClient(t, publicClass(nil), pendingClaim(testClassName), wrongClass, wrongFamily)
+	reconcileClaim(t, claimReconciler(c))
 
-	if claim := getClaim(t, c, "tenant-a", "web"); claim.Status.Phase != localv1alpha1.ClaimPending {
+	if claim := getClaim(t, c); claim.Status.Phase != localv1alpha1.ClaimPending {
 		t.Errorf("phase = %q, want Pending", claim.Status.Phase)
 	}
 }
 
 func TestDualClaimNeedsBothFamilies(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	claim.Spec.Family = localv1alpha1.FamilyDual
 	v4 := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-v4"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "203.0.113.10",
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
@@ -270,9 +282,9 @@ func TestDualClaimNeedsBothFamilies(t *testing.T) {
 	}
 	c := testClient(t, publicClass(nil), claim, v4)
 	r := claimReconciler(c)
-	reconcileClaim(t, r, "tenant-a", "web")
+	reconcileClaim(t, r)
 
-	got := getClaim(t, c, "tenant-a", "web")
+	got := getClaim(t, c)
 	if got.Status.Phase != localv1alpha1.ClaimPending {
 		t.Fatalf("phase = %q, want Pending (v6 still missing)", got.Status.Phase)
 	}
@@ -283,7 +295,7 @@ func TestDualClaimNeedsBothFamilies(t *testing.T) {
 	v6 := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-v6"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "2001:db8::10",
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
@@ -292,9 +304,9 @@ func TestDualClaimNeedsBothFamilies(t *testing.T) {
 	if err := c.Create(context.Background(), v6); err != nil {
 		t.Fatal(err)
 	}
-	reconcileClaim(t, r, "tenant-a", "web")
+	reconcileClaim(t, r)
 
-	got = getClaim(t, c, "tenant-a", "web")
+	got = getClaim(t, c)
 	if got.Status.Phase != localv1alpha1.ClaimBound {
 		t.Fatalf("phase = %q, want Bound", got.Status.Phase)
 	}
@@ -304,15 +316,15 @@ func TestDualClaimNeedsBothFamilies(t *testing.T) {
 }
 
 func TestClaimDeletionRetainReleasesAddress(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
 	addr := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-retained"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName:     "public",
+			ClassName:     testClassName,
 			Address:       "203.0.113.11",
 			ReclaimPolicy: localv1alpha1.ReclaimRetain,
-			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "claim-uid-1"},
+			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID},
 			Source:        localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressBound},
@@ -321,9 +333,9 @@ func TestClaimDeletionRetainReleasesAddress(t *testing.T) {
 	if err := c.Delete(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-a", Name: "web"}, &localv1alpha1.IPAddressClaim{})
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testClaimName}, &localv1alpha1.IPAddressClaim{})
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("claim still present after finalization: %v", err)
 	}
@@ -337,15 +349,15 @@ func TestClaimDeletionRetainReleasesAddress(t *testing.T) {
 }
 
 func TestClaimDeletionDeletePolicyDeletesAddress(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
 	addr := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-deleted"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName:     "public",
+			ClassName:     testClassName,
 			Address:       "203.0.113.12",
 			ReclaimPolicy: localv1alpha1.ReclaimDelete,
-			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "claim-uid-1"},
+			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID},
 			Source:        localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressBound},
@@ -354,7 +366,7 @@ func TestClaimDeletionDeletePolicyDeletesAddress(t *testing.T) {
 	if err := c.Delete(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
 	err := c.Get(context.Background(), types.NamespacedName{Name: "ip-deleted"}, &localv1alpha1.IPAddress{})
 	if !apierrors.IsNotFound(err) {
@@ -365,32 +377,32 @@ func TestClaimDeletionDeletePolicyDeletesAddress(t *testing.T) {
 func TestBoundClaimSurvivesClassDeletion(t *testing.T) {
 	// A fully bound claim must reconcile without touching its class:
 	// deleting the class breaks neither the binding nor status upkeep.
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
-	claim.Annotations = map[string]string{localv1alpha1.ProvisionerAnnotation: "metallb.drivers.local.sdn.cozystack.io"}
+	claim.Annotations = map[string]string{localv1alpha1.ProvisionerAnnotation: testProvisioner}
 	claim.Status = localv1alpha1.IPAddressClaimStatus{
 		Phase:     localv1alpha1.ClaimBound,
-		ClassName: "public",
+		ClassName: testClassName,
 	}
 	addr := &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ip-203-0-113-14"},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   "203.0.113.14",
-			ClaimRef:  &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "claim-uid-1"},
+			ClaimRef:  &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID},
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
 		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressBound},
 	}
 	// Note: no IPAddressClass object at all.
 	c := testClient(t, claim, addr)
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	got := getClaim(t, c, "tenant-a", "web")
+	got := getClaim(t, c)
 	if got.Status.Phase != localv1alpha1.ClaimBound {
 		t.Errorf("phase = %q, want Bound to survive class deletion", got.Status.Phase)
 	}
-	if got.Status.ClassName != "public" {
+	if got.Status.ClassName != testClassName {
 		t.Errorf("status.className = %q, want the sticky record untouched", got.Status.ClassName)
 	}
 	if len(got.Status.Addresses) != 1 || got.Status.Addresses[0].Address != "203.0.113.14" {
@@ -402,9 +414,9 @@ func TestPendingClaimWithMissingClassRecordsClassNotFound(t *testing.T) {
 	// An unbound claim naming a class that does not exist stays Pending
 	// with the reason recorded; only provisioning is blocked.
 	c := testClient(t, pendingClaim("nonexistent"))
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	claim := getClaim(t, c, "tenant-a", "web")
+	claim := getClaim(t, c)
 	if claim.Status.Phase != localv1alpha1.ClaimPending {
 		t.Errorf("phase = %q, want Pending", claim.Status.Phase)
 	}
@@ -415,18 +427,18 @@ func TestPendingClaimWithMissingClassRecordsClassNotFound(t *testing.T) {
 }
 
 func TestBoundClaimGoesLostWhenAddressDisappears(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
-	claim.Annotations = map[string]string{localv1alpha1.ProvisionerAnnotation: "metallb.drivers.local.sdn.cozystack.io"}
+	claim.Annotations = map[string]string{localv1alpha1.ProvisionerAnnotation: testProvisioner}
 	claim.Status = localv1alpha1.IPAddressClaimStatus{
 		Phase:     localv1alpha1.ClaimBound,
-		ClassName: "public",
+		ClassName: testClassName,
 		Addresses: []localv1alpha1.BoundAddress{{Name: "ip-gone", Address: "203.0.113.13"}},
 	}
 	c := testClient(t, publicClass(nil), claim)
-	reconcileClaim(t, claimReconciler(c), "tenant-a", "web")
+	reconcileClaim(t, claimReconciler(c))
 
-	got := getClaim(t, c, "tenant-a", "web")
+	got := getClaim(t, c)
 	if got.Status.Phase != localv1alpha1.ClaimLost {
 		t.Errorf("phase = %q, want Lost", got.Status.Phase)
 	}

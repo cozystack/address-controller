@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Timofei Larkin.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	localv1alpha1 "github.com/lllamnyp/address-controller/api/v1alpha1"
+	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
 
 func addressReconciler(c client.Client) *IPAddressReconciler {
@@ -52,7 +52,7 @@ func unboundAddress(name, ip string) *localv1alpha1.IPAddress {
 	return &localv1alpha1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: localv1alpha1.IPAddressSpec{
-			ClassName: "public",
+			ClassName: testClassName,
 			Address:   ip,
 			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
 		},
@@ -73,9 +73,9 @@ func TestUnboundAddressBecomesAvailable(t *testing.T) {
 }
 
 func TestBoundAddressWithLiveClaimBecomesBound(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	addr := unboundAddress("ip-2", "203.0.113.2")
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "claim-uid-1"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID}
 	c := testClient(t, claim, addr)
 	reconcileAddress(t, addressReconciler(c), "ip-2")
 
@@ -85,9 +85,9 @@ func TestBoundAddressWithLiveClaimBecomesBound(t *testing.T) {
 }
 
 func TestPreBoundAddressWithoutUIDStaysUntouched(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	addr := unboundAddress("ip-3", "203.0.113.3")
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName}
 	c := testClient(t, claim, addr)
 	reconcileAddress(t, addressReconciler(c), "ip-3")
 
@@ -99,7 +99,7 @@ func TestPreBoundAddressWithoutUIDStaysUntouched(t *testing.T) {
 func TestOrphanedAddressRetainIsReleased(t *testing.T) {
 	addr := unboundAddress("ip-4", "203.0.113.4")
 	addr.Spec.ReclaimPolicy = localv1alpha1.ReclaimRetain
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "gone", UID: "old-uid"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: "gone", UID: "old-uid"}
 	c := testClient(t, addr)
 	reconcileAddress(t, addressReconciler(c), "ip-4")
 
@@ -115,7 +115,7 @@ func TestOrphanedAddressRetainIsReleased(t *testing.T) {
 func TestOrphanedAddressDeletePolicyIsDeleted(t *testing.T) {
 	addr := unboundAddress("ip-5", "203.0.113.5")
 	addr.Spec.ReclaimPolicy = localv1alpha1.ReclaimDelete
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "gone", UID: "old-uid"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: "gone", UID: "old-uid"}
 	c := testClient(t, addr)
 	r := addressReconciler(c)
 	reconcileAddress(t, r, "ip-5")
@@ -130,9 +130,9 @@ func TestOrphanedAddressDeletePolicyIsDeleted(t *testing.T) {
 }
 
 func TestUIDMismatchTriggersReclaim(t *testing.T) {
-	claim := pendingClaim("public") // UID claim-uid-1
+	claim := pendingClaim(testClassName) // UID claim-uid-1
 	addr := unboundAddress("ip-6", "203.0.113.6")
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "some-older-uid"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: "some-older-uid"}
 	c := testClient(t, claim, addr)
 	reconcileAddress(t, addressReconciler(c), "ip-6")
 
@@ -156,10 +156,10 @@ func TestStickyPhasesAreNotOverwritten(t *testing.T) {
 }
 
 func TestDeletionBlockedWhileBoundToLiveClaim(t *testing.T) {
-	claim := pendingClaim("public")
+	claim := pendingClaim(testClassName)
 	addr := unboundAddress("ip-7", "203.0.113.7")
 	addr.Finalizers = []string{localv1alpha1.AddressProtectionFinalizer}
-	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: "tenant-a", Name: "web", UID: "claim-uid-1"}
+	addr.Spec.ClaimRef = &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID}
 	addr.Status.Phase = localv1alpha1.IPAddressBound
 	c := testClient(t, claim, addr)
 	if err := c.Delete(context.Background(), addr); err != nil {
