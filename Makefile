@@ -10,7 +10,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 CHART := chart/address-controller
 # Override to package a different version than the one in Chart.yaml.
-CHART_VERSION ?= 0.1.0
+CHART_VERSION ?= 0.1.1
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
