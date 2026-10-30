@@ -21,10 +21,12 @@ storage subsystem. It owns:
 - accepting and completing claim–address bindings,
 - matching pre-provisioned addresses to claims,
 - phase and condition bookkeeping on both sides,
-- finalizer-driven reclaim when a claim is deleted.
+- finalizer-driven reclaim when a claim is deleted,
+- auto-claiming addresses for LoadBalancer Services that name no claim
+  (§10).
 
 It never allocates an address, never interprets class parameters, never
-touches a Service, and never talks to a backend. Everything
+associates an address with a Service, and never talks to a backend. Everything
 backend-specific is a per-class driver's job, in a separate deployment,
 discovered through the class's `spec.provisioner` — exactly as a
 StorageClass names a CSI driver.
@@ -49,6 +51,9 @@ StorageClass names a CSI driver.
   read by the core. Shape is defined by the driver.
 - The annotation `ipaddressclass.local.sdn.cozystack.io/is-default-class:
   "true"` marks the class used by claims that name none.
+- The annotation `ipaddressclass.local.sdn.cozystack.io/is-auto-claim-class:
+  "true"` marks the class auto-claims draw from (§10). Independent of the
+  default class; at most one class may carry it.
 
 ### IPAddress
 
@@ -132,7 +137,7 @@ The contract is largely a discipline about who may write which field.
 
 | field | tenant | admin | core | driver |
 |---|---|---|---|---|
-| `Claim.spec` | ✍ creates/edits | | | |
+| `Claim.spec` | ✍ creates/edits | | ✍ creates (auto-claim only) | |
 | `Claim` provisioner annotation | | | ✍ stamps | reads |
 | `Claim.status.*` | | | ✍ | never |
 | `Claim` protection finalizer | | | ✍ | |
@@ -315,6 +320,10 @@ the claim disappears:
   - `Delete` → delete the `IPAddress` object. The core does not tear down
     any backend state; the driver's own finalizer on the address
     intercepts the deletion and deallocates first (§7 obligation 4).
+- Exception: a claim whose controller is a Service (an auto-claim, §10)
+  lives and dies with that Service, so its addresses are deleted
+  whatever their `reclaimPolicy`. Removing the controller reference turns
+  it into an ordinary claim, and the policy applies again.
 - Remove the finalizer; the claim goes away.
 
 **What each policy actually reclaims.** "The address" is up to three
@@ -412,7 +421,8 @@ tenant                core                          driver
 
 Deleting the claim, not the Service, is what releases the address — via
 §6, honoring the reclaim policy. This asymmetry is the entire point of
-the model.
+the model. Auto-claims (§10) are the deliberate exception: they belong to
+their Service until someone detaches them.
 
 ## 9. Relation to the design proposal
 
@@ -424,7 +434,47 @@ driver-registration CRD; no modeling of driver capabilities
 on; opaque-object class parameters rather than a string map; refusal over
 newest-wins for multiple default classes; dual-stack as two `IPAddress`
 objects under one claim; sticky class resolution recorded in status
-(there is no admission webhook to default the spec); and association,
-Service-watching, and admission policy left entirely to drivers. The API
+(there is no admission webhook to default the spec); association and
+admission policy left entirely to drivers; and auto-claim (§10) as the
+one place the core watches Services. The API
 group is `local.sdn.cozystack.io` rather than the proposal's sketched
 `ipam.cozystack.io`.
+
+## 10. Auto-claim for LoadBalancer Services
+
+Plain LoadBalancer Services — a tenant's, or the host-side Services a
+tenant cluster's cloud provider creates — name no claim, and drivers keep
+their pools away from automatic assignment. Without auto-claim such a
+Service gets either nothing or an address from some other pool that
+nobody meters. Auto-claim gives it a claim instead.
+
+A Service qualifies when it is a live `type: LoadBalancer` Service that:
+
+- carries no `local.sdn.cozystack.io/ip-address-claim` annotation,
+- does not carry `local.sdn.cozystack.io/auto-claim: "false"` (drivers
+  stamp this on Services they create for their own bookkeeping),
+- sets neither `spec.loadBalancerClass` (another implementation's) nor
+  `spec.loadBalancerIP` (asks for a specific address),
+- has no `status.loadBalancer.ingress` yet. This is what keeps a Service
+  addressed by other means from being moved to a new address.
+
+The class is the one named by the Service's
+`local.sdn.cozystack.io/ip-address-class` annotation, else the single class
+marked `is-auto-claim-class`. With no marked class the Service is left
+alone; with several, a warning event is recorded on it and nothing is
+claimed.
+
+The core then creates an `IPAddressClaim` named after the Service, in the
+Service's namespace, with that `className`, the family derived from the
+Service (`Dual` only for `RequireDualStack`), and the Service as its
+controller. If a claim of that name exists and is not controlled by the
+Service, nothing is adopted and an event says so. Finally the core sets
+the Service's `ip-address-claim` annotation to the claim; from there the
+driver associates the address exactly as for a tenant-made claim (§7
+obligation 5).
+
+Lifecycle: deleting the Service garbage-collects the claim, and the claim
+finalizer deletes its addresses regardless of `reclaimPolicy` (§6). To
+keep the address, remove the claim's controller reference; the claim then
+outlives the Service and can be named by another one. The core sets the
+reference only when creating the claim and never restores it.

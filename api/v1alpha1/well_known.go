@@ -25,6 +25,12 @@ const (
 	// storageclass.kubernetes.io/is-default-class.
 	IsDefaultClassAnnotation = "ipaddressclass.local.sdn.cozystack.io/is-default-class"
 
+	// IsAutoClaimClassAnnotation marks an IPAddressClass as the class the
+	// core controller auto-provisions claims from for LoadBalancer Services
+	// that name neither a claim nor a class. Value must be "true"; at most
+	// one class may carry it. Independent of IsDefaultClassAnnotation.
+	IsAutoClaimClassAnnotation = "ipaddressclass.local.sdn.cozystack.io/is-auto-claim-class"
+
 	// ProvisionerAnnotation is stamped onto an IPAddressClaim by the core
 	// controller once the claim's class is resolved. Its value is the
 	// class's spec.provisioner. Per-class drivers watch claims carrying
@@ -32,12 +38,22 @@ const (
 	// the analogue of volume.kubernetes.io/storage-provisioner.
 	ProvisionerAnnotation = "local.sdn.cozystack.io/provisioner"
 
-	// ServiceClaimAnnotation, set on a Service by a tenant, names an
-	// IPAddressClaim in the Service's own namespace whose address should be
-	// pinned to the Service. Consumed by per-class drivers (which translate
-	// it into the backend's raw pin annotation), never by tenants writing
-	// backend annotations directly.
+	// ServiceClaimAnnotation, set on a Service by a tenant or by the core
+	// controller's auto-claim, names an IPAddressClaim in the Service's own
+	// namespace whose address should be pinned to the Service. Consumed by
+	// per-class drivers (which translate it into the backend's raw pin
+	// annotation), never by tenants writing backend annotations directly.
 	ServiceClaimAnnotation = "local.sdn.cozystack.io/ip-address-claim"
+
+	// ServiceClassAnnotation, set on a LoadBalancer Service that names no
+	// claim, names the IPAddressClass to auto-provision its claim from
+	// instead of the auto-claim class.
+	ServiceClassAnnotation = "local.sdn.cozystack.io/ip-address-class"
+
+	// ServiceAutoClaimAnnotation set to "false" on a Service exempts it
+	// from auto-claim. Drivers stamp it on Services they create for their
+	// own bookkeeping, such as reservation placeholders.
+	ServiceAutoClaimAnnotation = "local.sdn.cozystack.io/auto-claim"
 
 	// ClaimProtectionFinalizer is placed on every IPAddressClaim by the
 	// core controller so that claim deletion runs the reclaim flow for the
@@ -66,4 +82,9 @@ const (
 	ReasonBound                  = "Bound"
 	ReasonWaitingForProvisioning = "WaitingForProvisioning"
 	ReasonAddressLost            = "AddressLost"
+
+	// Event reasons recorded on Services by auto-claim.
+	ReasonAutoClaimed              = "AutoClaimed"
+	ReasonAutoClaimNameTaken       = "AutoClaimNameTaken"
+	ReasonMultipleAutoClaimClasses = "MultipleAutoClaimClasses"
 )

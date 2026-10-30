@@ -374,6 +374,35 @@ func TestClaimDeletionDeletePolicyDeletesAddress(t *testing.T) {
 	}
 }
 
+func TestServiceOwnedClaimDeletionDeletesRetainedAddress(t *testing.T) {
+	claim := pendingClaim(testClassName)
+	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
+	claim.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "v1", Kind: serviceKind, Name: testClaimName, UID: testServiceUID, Controller: new(true),
+	}}
+	addr := &localv1alpha1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ip-auto"},
+		Spec: localv1alpha1.IPAddressSpec{
+			ClassName:     testClassName,
+			Address:       "203.0.113.13",
+			ReclaimPolicy: localv1alpha1.ReclaimRetain,
+			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID},
+			Source:        localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
+		},
+		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressBound},
+	}
+	c := testClient(t, publicClass(nil), claim, addr)
+	if err := c.Delete(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	reconcileClaim(t, claimReconciler(c))
+
+	err := c.Get(context.Background(), types.NamespacedName{Name: "ip-auto"}, &localv1alpha1.IPAddress{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("address of a Service-owned claim survived the claim under Retain: %v", err)
+	}
+}
+
 func TestBoundClaimSurvivesClassDeletion(t *testing.T) {
 	// A fully bound claim must reconcile without touching its class:
 	// deleting the class breaks neither the binding nor status upkeep.

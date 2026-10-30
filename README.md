@@ -75,8 +75,30 @@ core controller as follows:
    `Conflict` phase when an address is held by a Service its binding does not
    authorize, and `Lost` when the backing allocation disappears.
 
-The core controller never touches Services, never parses class parameters,
-and never puts a packet on a wire.
+## Auto-claim for LoadBalancer Services
+
+A LoadBalancer Service that names no claim gets one provisioned for it,
+so plain Services — including those a tenant cluster's cloud provider
+creates on the host — draw metered, attributed addresses instead of
+nothing:
+
+- Mark one class with
+  `ipaddressclass.local.sdn.cozystack.io/is-auto-claim-class: "true"`, or
+  name a class on the Service with `local.sdn.cozystack.io/ip-address-class`.
+- The core creates an `IPAddressClaim` named after the Service, in its
+  namespace and controlled by it, and sets the Service's
+  `local.sdn.cozystack.io/ip-address-claim` annotation; the driver takes it
+  from there.
+- Deleting the Service deletes the claim and its addresses, whatever the
+  class's `reclaimPolicy`. To keep the address, remove the claim's owner
+  reference; it is an ordinary claim from then on.
+- Skipped: Services that already name a claim, set
+  `local.sdn.cozystack.io/auto-claim: "false"`, set
+  `spec.loadBalancerClass` or `spec.loadBalancerIP`, or already have an
+  address.
+
+Apart from auto-claim, the core controller never touches Services. It
+never parses class parameters and never puts a packet on a wire.
 
 ## Installing
 

@@ -123,20 +123,29 @@ func (r *IPAddressClaimReconciler) finalizeClaim(ctx context.Context, claim *loc
 	if err != nil {
 		return err
 	}
+	// A claim still controlled by a Service lives and dies with it, so its
+	// addresses are deleted whatever their reclaimPolicy. Removing the
+	// controller reference is how such a claim is retained.
+	ownedByService := controlledByService(claim)
 	for i := range addrs {
 		addr := &addrs[i]
 		if !addr.DeletionTimestamp.IsZero() {
 			continue
 		}
-		switch addr.Spec.ReclaimPolicy {
-		case localv1alpha1.ReclaimDelete:
+		switch {
+		case ownedByService || addr.Spec.ReclaimPolicy == localv1alpha1.ReclaimDelete:
 			// The driver's own finalizer tears down the backend allocation
 			// before the object goes away.
 			if err := r.Delete(ctx, addr); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
-			r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
-				"IPAddress %s deleted per reclaimPolicy Delete", addr.Name)
+			if ownedByService {
+				r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
+					"IPAddress %s deleted with the claim's owning Service", addr.Name)
+			} else {
+				r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
+					"IPAddress %s deleted per reclaimPolicy Delete", addr.Name)
+			}
 		default: // Retain
 			if addr.Status.Phase != localv1alpha1.IPAddressReleased {
 				addr.Status.Phase = localv1alpha1.IPAddressReleased
@@ -150,6 +159,12 @@ func (r *IPAddressClaimReconciler) finalizeClaim(ctx context.Context, claim *loc
 	}
 	controllerutil.RemoveFinalizer(claim, localv1alpha1.ClaimProtectionFinalizer)
 	return r.Update(ctx, claim)
+}
+
+// controlledByService reports whether a claim's controller is a Service.
+func controlledByService(claim *localv1alpha1.IPAddressClaim) bool {
+	ref := metav1.GetControllerOf(claim)
+	return ref != nil && ref.APIVersion == "v1" && ref.Kind == serviceKind
 }
 
 // resolveClass resolves the claim's class name — spec first, then the sticky
