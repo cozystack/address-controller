@@ -34,6 +34,7 @@ import (
 const (
 	testServiceName = "web-lb"
 	testServiceUID  = "svc-uid-1"
+	serviceKind     = "Service"
 )
 
 func serviceReconciler(c client.Client) *ServiceReconciler {
@@ -126,6 +127,15 @@ func TestAutoClaimSkipsIneligibleServices(t *testing.T) {
 		},
 		"other load balancer class": func(s *corev1.Service) { s.Spec.LoadBalancerClass = new("example.com/lb") },
 		"asks for a specific IP":    func(s *corev1.Service) { s.Spec.LoadBalancerIP = "203.0.113.50" },
+		"names a backend pool": func(s *corev1.Service) {
+			s.Annotations = map[string]string{"metallb.io/address-pool": "public"}
+		},
+		"pins through the legacy prefix": func(s *corev1.Service) {
+			s.Annotations = map[string]string{"metallb.universe.tf/loadBalancerIPs": "203.0.113.52"}
+		},
+		"shares an address": func(s *corev1.Service) {
+			s.Annotations = map[string]string{"metallb.io/allow-shared-ip": "web"}
+		},
 		"already addressed": func(s *corev1.Service) {
 			s.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.51"}}
 		},

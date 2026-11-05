@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,9 +36,6 @@ import (
 
 	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
-
-// serviceKind is the kind a Service controller reference names.
-const serviceKind = "Service"
 
 // ServiceReconciler auto-claims addresses for LoadBalancer Services that
 // name no claim: it creates an IPAddressClaim in the Service's namespace,
@@ -119,12 +117,26 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
+// backendAddressInputs are the Service annotations through which a backend
+// is told which pool to draw from, which address to use, or whom to share
+// one with: the gated set of the design proposal's Security section, which
+// also gates spec.loadBalancerIP. A Service carrying one has chosen its
+// address source. The driver's own placeholders name their pool this way.
+var backendAddressInputs = []string{
+	"metallb.io/loadBalancerIPs",
+	"metallb.io/address-pool",
+	"metallb.io/allow-shared-ip",
+	"metallb.universe.tf/loadBalancerIPs",
+	"metallb.universe.tf/address-pool",
+	"metallb.universe.tf/allow-shared-ip",
+}
+
 // wantsAutoClaim reports whether a Service qualifies for auto-claim: a live
 // LoadBalancer Service that names no claim, has not opted out, is not left
-// to another load-balancer implementation, asks for no specific IP, and has
-// no address yet. The last rule is what keeps Services addressed by other
-// means — before auto-claim existed, or from an auto-assigning pool — from
-// being moved to a new address.
+// to another load-balancer implementation, carries no backend pool or pin
+// input, and has no address yet. The last rule keeps a Service addressed by
+// other means — before auto-claim existed, or from an auto-assigning pool —
+// from being moved to a new address.
 func wantsAutoClaim(svc *corev1.Service) bool {
 	return svc.Spec.Type == corev1.ServiceTypeLoadBalancer &&
 		svc.DeletionTimestamp.IsZero() &&
@@ -132,6 +144,10 @@ func wantsAutoClaim(svc *corev1.Service) bool {
 		svc.Annotations[localv1alpha1.ServiceAutoClaimAnnotation] != "false" &&
 		svc.Spec.LoadBalancerClass == nil &&
 		svc.Spec.LoadBalancerIP == "" &&
+		!slices.ContainsFunc(backendAddressInputs, func(key string) bool {
+			_, ok := svc.Annotations[key]
+			return ok
+		}) &&
 		len(svc.Status.LoadBalancer.Ingress) == 0
 }
 

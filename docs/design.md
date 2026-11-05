@@ -191,17 +191,24 @@ idempotent; the pass re-derives everything from the cluster state.
    is bound to an earlier, deleted claim that happened to have the same
    name — a stale binding. It is never adopted; the address reconciler
    reclaims it (§5 step 6).
-4. **Complete pre-bindings.** For collected addresses with an empty
-   `claimRef.uid` (a driver pre-bound them at creation), write the claim's
-   UID. This is the core's acceptance of the driver's provisioning.
-5. **Anything missing?** Expand `spec.family` into concrete families
-   (`Dual` → v4 + v6); a family is satisfied if some collected address of
-   that family exists and is not in phase `Lost`. **If every family is
-   satisfied, skip straight to status (step 8) — the class is not
-   consulted at all.** Binding state comes strictly before class state:
+4. **Accept pre-bindings.** For collected addresses with an empty
+   `claimRef.uid` (a driver or an admin pre-bound them), write the claim's
+   UID if the address is of the claim's class, of a requested family, and
+   of a family the claim does not already hold. This is the core's
+   acceptance of the driver's provisioning. A claim that has not recorded
+   a class resolves it first (step 6). A mismatched pre-binding is refused
+   with a `PreBindingRefused` event and is not collected, as the PV
+   controller leaves a pre-bound volume that does not satisfy its claim.
+5. **Anything unbound?** Expand `spec.family` into concrete families
+   (`Dual` → v4 + v6); a family is unbound if no collected address of that
+   family exists, in any phase. A `Lost` address keeps its family: the
+   claim waits for it to be restored or deleted and is never given a
+   second address of that family. **If no family is unbound, skip
+   straight to status (step 8) — the class is not consulted at all.** Binding state comes strictly before class state:
    a fully bound claim needs nothing from its class, so a deleted class
    never disturbs existing bindings (see *Class deletion* below).
-6. **Class resolution** (only reached with families missing). Resolve a
+6. **Class resolution** (only reached with families unbound, or with a
+   pre-binding to judge). Resolve a
    class name, trying in order:
    1. `spec.className`, if set (an explicit spec always wins);
    2. `status.className` — the sticky record of a previous resolution, so
@@ -222,7 +229,7 @@ idempotent; the pass re-derives everything from the cluster state.
    the stamp follows. This annotation is the driver's watch key; it is
    how a driver knows a claim is its to serve without ever resolving
    classes itself.
-7. **Match, per missing family.** For each unsatisfied family:
+7. **Match, per unbound family.** For each unbound family:
    - candidate set: if `spec.addressName` is set, only that object;
      otherwise every address in phase `Available` (so: no `claimRef`, and
      already accepted by the address reconciler) with the resolved class
@@ -235,11 +242,11 @@ idempotent; the pass re-derives everything from the cluster state.
    - no candidate → the family stays unsatisfied and the claim waits for
      its driver to provision.
 8. **Status.** Recompute from scratch:
-   - all families satisfied → `Bound`;
-   - previously `Bound` (or `Lost`) and now unsatisfied → `Lost` — a
-     binding degraded, which is surfaced, never silently re-provisioned
-     around; the claim returns to `Bound` by itself if the address comes
-     back;
+   - every family has a collected address not in phase `Lost` → `Bound`;
+   - previously `Bound` (or `Lost`) and now not → `Lost` — a binding
+     degraded, which is surfaced, never silently re-provisioned around;
+     the claim returns to `Bound` by itself if the address comes back,
+     and binds a new one once an admin deletes the `Lost` address;
    - otherwise `Pending`, with the `Bound` condition explaining what it
      waits for (`WaitingForProvisioning` names the stamped provisioner).
    `status.addresses` lists every collected address (name + IP), sorted
@@ -312,18 +319,22 @@ Runs behind the claim's protection finalizer, so it always runs before
 the claim disappears:
 
 - For every address bound to the claim (same collection rule as §4 step
-  3), apply **the address's** `reclaimPolicy` — copied from the class at
+  3, less pre-bindings step 4 would refuse), apply **the address's**
+  `reclaimPolicy` — copied from the class at
   provisioning time, so a later class edit does not retroactively change
   the fate of existing addresses:
   - `Retain` → phase `Released`. The `claimRef` **survives** — the
     released address is not reusable until an admin clears it (§5 step 5).
+    An address in `Conflict` or `Lost` keeps its phase: both belong to the
+    driver (§3).
   - `Delete` → delete the `IPAddress` object. The core does not tear down
     any backend state; the driver's own finalizer on the address
     intercepts the deletion and deallocates first (§7 obligation 4).
-- Exception: a claim whose controller is a Service (an auto-claim, §10)
-  lives and dies with that Service, so its addresses are deleted
-  whatever their `reclaimPolicy`. Removing the controller reference turns
-  it into an ordinary claim, and the policy applies again.
+- Exception: a claim with a controller owner — a Service for an
+  auto-claim (§10), or any controller that mints claims for a tenant —
+  lives and dies with that owner, so its addresses are deleted whatever
+  their `reclaimPolicy`. Removing the controller reference turns it into
+  an ordinary claim, and the policy applies again.
 - Remove the finalizer; the claim goes away.
 
 **What each policy actually reclaims.** "The address" is up to three
@@ -455,6 +466,11 @@ A Service qualifies when it is a live `type: LoadBalancer` Service that:
   stamp this on Services they create for their own bookkeeping),
 - sets neither `spec.loadBalancerClass` (another implementation's) nor
   `spec.loadBalancerIP` (asks for a specific address),
+- carries none of the backend's pool, pin or sharing annotations: for
+  MetalLB, `loadBalancerIPs`, `address-pool` and `allow-shared-ip` under
+  `metallb.io/` or `metallb.universe.tf/`. Such a Service has chosen its
+  address source. A driver's placeholders name their pool this way, so
+  this rule excludes them even without the opt-out,
 - has no `status.loadBalancer.ingress` yet. This is what keeps a Service
   addressed by other means from being moved to a new address.
 

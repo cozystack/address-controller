@@ -90,12 +90,13 @@ nothing:
   `local.sdn.cozystack.io/ip-address-claim` annotation; the driver takes it
   from there.
 - Deleting the Service deletes the claim and its addresses, whatever the
-  class's `reclaimPolicy`. To keep the address, remove the claim's owner
-  reference; it is an ordinary claim from then on.
+  class's `reclaimPolicy`. This holds for any claim with a controller
+  owner. To keep the address, remove the claim's owner reference; it is an
+  ordinary claim from then on.
 - Skipped: Services that already name a claim, set
   `local.sdn.cozystack.io/auto-claim: "false"`, set
-  `spec.loadBalancerClass` or `spec.loadBalancerIP`, or already have an
-  address.
+  `spec.loadBalancerClass` or `spec.loadBalancerIP`, carry a MetalLB pool,
+  pin or sharing annotation, or already have an address.
 
 Apart from auto-claim, the core controller never touches Services. It
 never parses class parameters and never puts a packet on a wire.
