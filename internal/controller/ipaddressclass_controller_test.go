@@ -93,3 +93,31 @@ func TestDeletedClassIsReleasedWithoutAddresses(t *testing.T) {
 		t.Errorf("class still present with no addresses of its own: %v", err)
 	}
 }
+
+func TestDeletedClassIsNotChosenByDefault(t *testing.T) {
+	class := defaultClass()
+	class.Finalizers = []string{localv1alpha1.ClassProtectionFinalizer}
+	c := testClient(t, class, pendingClaim(""))
+	if err := c.Delete(context.Background(), class); err != nil {
+		t.Fatal(err)
+	}
+	reconcileClaim(t, claimReconciler(c))
+
+	if got := getClaim(t, c); got.Status.ClassName != "" {
+		t.Errorf("claim resolved to the deleted default class %q", got.Status.ClassName)
+	}
+}
+
+func TestDeletedClassIsNotChosenForAutoClaim(t *testing.T) {
+	class := autoClaimClass(testClassName)
+	class.Finalizers = []string{localv1alpha1.ClassProtectionFinalizer}
+	c := testClient(t, class, loadBalancerService())
+	if err := c.Delete(context.Background(), class); err != nil {
+		t.Fatal(err)
+	}
+	reconcileService(t, serviceReconciler(c))
+
+	if claim := getAutoClaim(t, c); claim != nil {
+		t.Errorf("claim auto-provisioned from the deleted class %q", claim.Spec.ClassName)
+	}
+}

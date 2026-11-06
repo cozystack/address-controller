@@ -81,6 +81,11 @@ func (r *IPAddressClassReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, r.Update(ctx, class)
 }
 
+// classDeleting reports whether a class is being deleted.
+func classDeleting(c localv1alpha1.IPAddressClass) bool {
+	return !c.DeletionTimestamp.IsZero()
+}
+
 // classForAddress maps an IPAddress event to the address's class.
 func (r *IPAddressClassReconciler) classForAddress(_ context.Context, o client.Object) []reconcile.Request {
 	addr := o.(*localv1alpha1.IPAddress)
