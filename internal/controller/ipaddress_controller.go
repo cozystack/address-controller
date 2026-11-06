@@ -18,8 +18,11 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -42,12 +45,15 @@ type IPAddressReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// Now returns the current time; nil means time.Now.
+	Now func() time.Time
 }
 
 // +kubebuilder:rbac:groups=local.sdn.cozystack.io,resources=ipaddresses,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=local.sdn.cozystack.io,resources=ipaddresses/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=local.sdn.cozystack.io,resources=ipaddresses/finalizers,verbs=update
 // +kubebuilder:rbac:groups=local.sdn.cozystack.io,resources=ipaddressclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=local.sdn.cozystack.io,resources=ipaddressclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile drives an IPAddress's phase bookkeeping.
@@ -95,9 +101,13 @@ func (r *IPAddressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	switch {
 	case claim == nil:
-		// The claim is gone but the claim-side reclaim never ran (stale
-		// UID, or the claim disappeared without the finalizer flow).
-		return ctrl.Result{}, r.reclaim(ctx, addr)
+		// The claim is gone: reclaim it, unless the claim-side flow already
+		// did (a stale UID, or a claim that vanished without its
+		// finalizer), and then count down a Released address's delay.
+		if err := r.reclaim(ctx, addr); err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.releaseAfterDelay(ctx, addr)
 	case !claim.DeletionTimestamp.IsZero():
 		// The claim-side flow owns the transition; nothing to do here.
 		return ctrl.Result{}, nil
@@ -170,11 +180,86 @@ func (r *IPAddressReconciler) reclaim(ctx context.Context, addr *localv1alpha1.I
 }
 
 func (r *IPAddressReconciler) setPhase(ctx context.Context, addr *localv1alpha1.IPAddress, phase localv1alpha1.IPAddressPhase) error {
-	if addr.Status.Phase == phase {
+	if !markPhase(addr, phase) {
 		return nil
 	}
-	addr.Status.Phase = phase
 	return r.Status().Update(ctx, addr)
+}
+
+// releaseAfterDelay returns a Released address to the pool once its
+// class's releaseDelay has passed since it was Released, by clearing its
+// claimRef; the next pass makes it Available. An address annotated held,
+// or of a class without a delay, is left alone.
+func (r *IPAddressReconciler) releaseAfterDelay(ctx context.Context, addr *localv1alpha1.IPAddress) (ctrl.Result, error) {
+	if addr.Status.Phase != localv1alpha1.IPAddressReleased || addr.Annotations[localv1alpha1.HeldAnnotation] == localv1alpha1.AnnotationTrue {
+		return ctrl.Result{}, nil
+	}
+	class := &localv1alpha1.IPAddressClass{}
+	if err := r.Get(ctx, types.NamespacedName{Name: addr.Spec.ClassName}, class); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if class.Spec.ReleaseDelay == nil || class.Spec.ReleaseDelay.Duration <= 0 {
+		return ctrl.Result{}, nil
+	}
+	released := meta.FindStatusCondition(addr.Status.Conditions, localv1alpha1.ConditionBound)
+	if released == nil || released.Reason != localv1alpha1.ReasonReleased {
+		return ctrl.Result{}, nil
+	}
+	now := time.Now
+	if r.Now != nil {
+		now = r.Now
+	}
+	if remaining := released.LastTransitionTime.Add(class.Spec.ReleaseDelay.Duration).Sub(now()); remaining > 0 {
+		return ctrl.Result{RequeueAfter: remaining}, nil
+	}
+	ref := addr.Spec.ClaimRef
+	addr.Spec.ClaimRef = nil
+	if err := r.Update(ctx, addr); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Eventf(addr, "Normal", "ReleaseDelayElapsed",
+		"released by claim %s/%s for %s; returned to the pool", ref.Namespace, ref.Name, class.Spec.ReleaseDelay.Duration)
+	return ctrl.Result{}, nil
+}
+
+// markPhase sets a core-owned phase on the in-memory address together with
+// its Bound condition, whose lastTransitionTime then dates the change. It
+// reports whether anything changed.
+func markPhase(addr *localv1alpha1.IPAddress, phase localv1alpha1.IPAddressPhase) bool {
+	cond := metav1.Condition{
+		Type:               localv1alpha1.ConditionBound,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: addr.Generation,
+	}
+	switch phase {
+	case localv1alpha1.IPAddressBound:
+		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, localv1alpha1.ReasonBound, "bound to its claim"
+	case localv1alpha1.IPAddressReleased:
+		cond.Reason, cond.Message = localv1alpha1.ReasonReleased, "its claim was deleted under reclaimPolicy Retain"
+	case localv1alpha1.IPAddressAvailable:
+		cond.Reason, cond.Message = localv1alpha1.ReasonAvailable, "bound to no claim"
+	default:
+		cond.Reason, cond.Message = localv1alpha1.ReasonPending, "spec.address does not parse"
+	}
+	changed := addr.Status.Phase != phase
+	addr.Status.Phase = phase
+	return meta.SetStatusCondition(&addr.Status.Conditions, cond) || changed
+}
+
+// releasedAddressesForClass maps a class event to its Released addresses,
+// so a changed releaseDelay takes effect.
+func (r *IPAddressReconciler) releasedAddressesForClass(ctx context.Context, o client.Object) []reconcile.Request {
+	list := &localv1alpha1.IPAddressList{}
+	if err := r.List(ctx, list, client.MatchingFields{IPAddressClassNameIndex: o.GetName()}); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, addr := range list.Items {
+		if addr.Status.Phase == localv1alpha1.IPAddressReleased {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: addr.Name}})
+		}
+	}
+	return reqs
 }
 
 // addressesForClaim maps a claim event to the addresses bound to it, so
@@ -198,6 +283,7 @@ func (r *IPAddressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&localv1alpha1.IPAddress{}).
 		Watches(&localv1alpha1.IPAddressClaim{}, handler.EnqueueRequestsFromMapFunc(r.addressesForClaim)).
+		Watches(&localv1alpha1.IPAddressClass{}, handler.EnqueueRequestsFromMapFunc(r.releasedAddressesForClass)).
 		Named("ipaddress").
 		Complete(r)
 }

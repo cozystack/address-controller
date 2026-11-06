@@ -161,7 +161,7 @@ func (r *ServiceReconciler) autoClaimClassName(ctx context.Context, svc *corev1.
 	}
 	var marked []string
 	for _, c := range classes.Items {
-		if c.Annotations[localv1alpha1.IsAutoClaimClassAnnotation] == "true" {
+		if c.Annotations[localv1alpha1.IsAutoClaimClassAnnotation] == localv1alpha1.AnnotationTrue {
 			marked = append(marked, c.Name)
 		}
 	}

@@ -20,6 +20,10 @@ package v1alpha1
 // Together with the CRD schemas these constants are the contract between the
 // core controller and the per-class drivers.
 const (
+	// AnnotationTrue is the value that turns on a boolean annotation of
+	// this group, such as IsDefaultClassAnnotation.
+	AnnotationTrue = "true"
+
 	// IsDefaultClassAnnotation marks an IPAddressClass as the class for
 	// claims that do not name one. Value must be "true". The analogue of
 	// storageclass.kubernetes.io/is-default-class.
@@ -55,6 +59,11 @@ const (
 	// own bookkeeping, such as reservation placeholders.
 	ServiceAutoClaimAnnotation = "local.sdn.cozystack.io/auto-claim"
 
+	// HeldAnnotation set to "true" on an IPAddress exempts it from its
+	// class's releaseDelay: a Released address stays Released until an
+	// admin clears its claimRef.
+	HeldAnnotation = "ipaddress.local.sdn.cozystack.io/held"
+
 	// ClaimProtectionFinalizer is placed on every IPAddressClaim by the
 	// core controller so that claim deletion runs the reclaim flow for the
 	// bound addresses before the claim disappears.
@@ -88,6 +97,12 @@ const (
 	ReasonBound                  = "Bound"
 	ReasonWaitingForProvisioning = "WaitingForProvisioning"
 	ReasonAddressLost            = "AddressLost"
+
+	// Reasons of the Bound condition on an IPAddress, which the core sets
+	// with its phase; its lastTransitionTime dates the last change.
+	ReasonAvailable = "Available"
+	ReasonReleased  = "Released"
+	ReasonPending   = "Pending"
 
 	// ReasonClassInUse is recorded on a deleted class that still has
 	// addresses.
