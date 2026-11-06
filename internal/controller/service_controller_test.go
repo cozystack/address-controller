@@ -177,7 +177,7 @@ func TestAutoClaimWithMultipleMarkedClassesClaimsNothing(t *testing.T) {
 
 func TestAutoClaimUsesClassNamedByService(t *testing.T) {
 	svc := loadBalancerService()
-	svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: "private"}
+	svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: otherClassName}
 	c := testClient(t, autoClaimClass(testClassName), svc)
 	reconcileService(t, serviceReconciler(c))
 
@@ -185,8 +185,8 @@ func TestAutoClaimUsesClassNamedByService(t *testing.T) {
 	if claim == nil {
 		t.Fatal("no claim auto-provisioned")
 	}
-	if claim.Spec.ClassName != "private" {
-		t.Errorf("claim className = %q, want the Service's %q", claim.Spec.ClassName, "private")
+	if claim.Spec.ClassName != otherClassName {
+		t.Errorf("claim className = %q, want the Service's %q", claim.Spec.ClassName, otherClassName)
 	}
 }
 

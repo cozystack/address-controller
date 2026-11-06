@@ -159,6 +159,9 @@ func (r *ServiceReconciler) autoClaimClassName(ctx context.Context, svc *corev1.
 	if err := r.List(ctx, classes); err != nil {
 		return "", err
 	}
+	// A deleted class is held only until its addresses are gone; drawing
+	// new claims into it would keep it from draining.
+	classes.Items = slices.DeleteFunc(classes.Items, classDeleting)
 	var marked []string
 	for _, c := range classes.Items {
 		if c.Annotations[localv1alpha1.IsAutoClaimClassAnnotation] == "true" {

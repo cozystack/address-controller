@@ -60,6 +60,12 @@ const (
 	// bound addresses before the claim disappears.
 	ClaimProtectionFinalizer = "local.sdn.cozystack.io/claim-protection"
 
+	// ClassProtectionFinalizer is placed on every IPAddressClass by the core
+	// controller. It holds a deleted class until no IPAddress of the class
+	// is left: drivers resolve their backend configuration through the
+	// class to hold and pin its addresses.
+	ClassProtectionFinalizer = "local.sdn.cozystack.io/class-protection"
+
 	// AddressProtectionFinalizer is placed on every IPAddress by the core
 	// controller. It blocks deletion of an address that is still bound to a
 	// live claim. Drivers add their own finalizer on addresses they
@@ -82,6 +88,10 @@ const (
 	ReasonBound                  = "Bound"
 	ReasonWaitingForProvisioning = "WaitingForProvisioning"
 	ReasonAddressLost            = "AddressLost"
+
+	// ReasonClassInUse is recorded on a deleted class that still has
+	// addresses.
+	ReasonClassInUse = "ClassInUse"
 
 	// Event reasons recorded on Services by auto-claim.
 	ReasonAutoClaimed              = "AutoClaimed"

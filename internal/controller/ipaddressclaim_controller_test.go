@@ -36,6 +36,7 @@ import (
 
 const (
 	testClassName   = "public"
+	otherClassName  = "private"
 	testProvisioner = "metallb.drivers.local.sdn.cozystack.io"
 	testNamespace   = "tenant-a"
 	testClaimName   = "web"
@@ -59,13 +60,8 @@ func testClient(t *testing.T, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
 		WithStatusSubresource(&localv1alpha1.IPAddress{}, &localv1alpha1.IPAddressClaim{}).
-		WithIndex(&localv1alpha1.IPAddress{}, IPAddressClaimRefIndex, func(o client.Object) []string {
-			addr := o.(*localv1alpha1.IPAddress)
-			if addr.Spec.ClaimRef == nil {
-				return nil
-			}
-			return []string{ClaimRefIndexKey(addr.Spec.ClaimRef.Namespace, addr.Spec.ClaimRef.Name)}
-		}).
+		WithIndex(&localv1alpha1.IPAddress{}, IPAddressClaimRefIndex, claimRefIndex).
+		WithIndex(&localv1alpha1.IPAddress{}, IPAddressClassNameIndex, classNameIndex).
 		WithObjects(objs...).
 		Build()
 }
@@ -449,7 +445,7 @@ func TestLostAddressIsNotReplaced(t *testing.T) {
 
 func TestClaimRefusesMismatchedPreBinding(t *testing.T) {
 	cases := map[string]*localv1alpha1.IPAddress{
-		"other class":        preBoundAddress("203.0.113.18", "private"),
+		"other class":        preBoundAddress("203.0.113.18", otherClassName),
 		"unrequested family": preBoundAddress("2001:db8::18", testClassName),
 	}
 	for name, addr := range cases {
@@ -499,7 +495,7 @@ func TestOwnedClaimDeletionSparesRefusedPreBinding(t *testing.T) {
 	claim.OwnerReferences = []metav1.OwnerReference{{
 		APIVersion: "v1", Kind: serviceKind, Name: "web-lb", UID: testServiceUID, Controller: new(true),
 	}}
-	c := testClient(t, publicClass(nil), claim, preBoundAddress("203.0.113.21", "private"))
+	c := testClient(t, publicClass(nil), claim, preBoundAddress("203.0.113.21", otherClassName))
 	if err := c.Delete(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}

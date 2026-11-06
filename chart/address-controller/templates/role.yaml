@@ -53,6 +53,7 @@ rules:
   - local.sdn.cozystack.io
   resources:
   - ipaddressclaims/finalizers
+  - ipaddressclasses/finalizers
   - ipaddresses/finalizers
   verbs:
   - update
@@ -72,6 +73,8 @@ rules:
   verbs:
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - local.sdn.cozystack.io

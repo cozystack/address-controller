@@ -148,7 +148,7 @@ The contract is largely a discipline about who may write which field.
 | `Address.status.associatedTo` | | | never | ✍ |
 | `Address` protection finalizer | | | ✍ | |
 | `Address` driver finalizer(s) | | | | ✍ |
-| `IPAddressClass` | | ✍ | reads | reads (incl. parameters) |
+| `IPAddressClass` | | ✍ | reads; ✍ protection finalizer | reads (incl. parameters) |
 
 Two invariants fall out of this table:
 
@@ -253,16 +253,17 @@ idempotent; the pass re-derives everything from the cluster state.
    by object name. `status.className` records the resolution when one
    happened this pass and is left untouched otherwise.
 
-**Class deletion.** The class is load-bearing only at two moments:
-resolving/stamping an unbound claim, and matching or provisioning *new*
-bindings. Everything downstream deliberately avoids depending on it:
-satisfied claims skip class resolution entirely (step 5), reclaim reads
-the `reclaimPolicy` **copied onto each address** at provisioning time
-(§6), and the address reconciler never reads classes at all. So deleting
-an `IPAddressClass` — or restarting the controller after its deletion —
-leaves every existing binding, every reclaim, and all status upkeep
-intact; the only effect is that still-unbound claims of that class stop
-progressing, honestly reported as `Pending` with `ClassNotFound`.
+**Class deletion.** The core holds a deleted class with the
+`local.sdn.cozystack.io/class-protection` finalizer until no `IPAddress`
+of the class is left, in any phase, and records a `ClassInUse` event
+naming the addresses it waits for. Drivers resolve their backend
+configuration through the class to hold and pin its addresses, so a class
+must outlive them. The claim side does not depend on this: satisfied
+claims skip class resolution entirely (step 5), and reclaim reads the
+`reclaimPolicy` **copied onto each address** at provisioning time (§6). A
+class removed by force leaves existing bindings, reclaim and status upkeep
+intact; still-unbound claims of that class stay `Pending` with
+`ClassNotFound`.
 
 ## 5. The address reconciliation algorithm
 
