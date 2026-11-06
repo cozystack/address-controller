@@ -55,13 +55,21 @@ If the controllers are already gone, clear the finalizers by hand, for
 example:
 
 ```sh
-kubectl get ipaddressclaims -A -o name | xargs -r -n1 kubectl patch --type=merge \
-  -p '{"metadata":{"finalizers":null}}'
+kubectl get ipaddressclaims.local.sdn.cozystack.io -A \
+  -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' |
+  while read -r ns name; do
+    kubectl -n "$ns" patch ipaddressclaims.local.sdn.cozystack.io "$name" \
+      --type=merge -p '{"metadata":{"finalizers":null}}'
+  done
+for kind in ipaddresses ipaddressclasses; do
+  kubectl get "$kind.local.sdn.cozystack.io" -o name |
+    xargs -r -n1 kubectl patch --type=merge -p '{"metadata":{"finalizers":null}}'
+done
 ```
 
-and likewise for `ipaddresses` and `ipaddressclasses`. Backend state the
-driver would have released, such as MetalLB placeholder Services, is then
-left for you to delete.
+The group suffix matters: `ipaddresses` alone resolves to the Kubernetes
+`networking.k8s.io` kind. Backend state the driver would have released,
+such as MetalLB placeholder Services, is then left for you to delete.
 
 ## Upgrading the CRDs
 
