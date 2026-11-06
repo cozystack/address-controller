@@ -113,7 +113,7 @@ func publicClass(annotations map[string]string) *localv1alpha1.IPAddressClass {
 }
 
 func defaultClass() *localv1alpha1.IPAddressClass {
-	return publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: "true"})
+	return publicClass(map[string]string{localv1alpha1.IsDefaultClassAnnotation: localv1alpha1.AnnotationTrue})
 }
 
 func pendingClaim(className string) *localv1alpha1.IPAddressClaim {
@@ -341,6 +341,9 @@ func TestClaimDeletionRetainReleasesAddress(t *testing.T) {
 	}
 	if got.Spec.ClaimRef == nil {
 		t.Error("claimRef cleared on Retain; it must survive until an admin clears it")
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, localv1alpha1.ConditionBound); cond == nil || cond.Reason != localv1alpha1.ReasonReleased {
+		t.Errorf("Bound condition = %+v, want reason Released to date the release", cond)
 	}
 }
 

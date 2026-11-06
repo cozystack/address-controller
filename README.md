@@ -35,7 +35,9 @@ claim as a `Released` `IPAddress`.
   `IPAddress` and reports both in `status.addresses`.
 - **Address**: `Pending` → `Available` (no `claimRef`) → `Bound` →
   `Released` (claim deleted under `Retain`; not reusable until an admin
-  clears `spec.claimRef`, at which point it is `Available` again). `Conflict`
+  clears `spec.claimRef`, or the class's `spec.releaseDelay` elapses, at
+  which point it is `Available` again; an address annotated
+  `ipaddress.local.sdn.cozystack.io/held: "true"` waits for the admin). `Conflict`
   and `Lost` are driver-owned phases; the core controller treats them as
   sticky.
 

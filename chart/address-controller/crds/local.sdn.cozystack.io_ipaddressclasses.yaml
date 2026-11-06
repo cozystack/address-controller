@@ -80,6 +80,14 @@ spec:
                 - Retain
                 - Delete
                 type: string
+              releaseDelay:
+                description: |-
+                  releaseDelay, under reclaimPolicy Retain, returns a Released address
+                  of this class to Available once it has been Released this long: the
+                  core controller clears its claimRef. Unset keeps a Released address
+                  until an admin clears it. An address annotated
+                  ipaddress.local.sdn.cozystack.io/held: "true" is exempt.
+                type: string
             required:
             - provisioner
             type: object
