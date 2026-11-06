@@ -79,7 +79,7 @@ func getAutoClaim(t *testing.T, c client.Client) *localv1alpha1.IPAddressClaim {
 }
 
 func autoClaimClass(name string) *localv1alpha1.IPAddressClass {
-	class := publicClass(map[string]string{localv1alpha1.IsAutoClaimClassAnnotation: "true"})
+	class := publicClass(map[string]string{localv1alpha1.IsAutoClaimClassAnnotation: localv1alpha1.AnnotationTrue})
 	class.Name = name
 	return class
 }

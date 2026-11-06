@@ -166,8 +166,7 @@ func (r *IPAddressClaimReconciler) finalizeClaim(ctx context.Context, claim *loc
 		case addr.Status.Phase == localv1alpha1.IPAddressConflict || addr.Status.Phase == localv1alpha1.IPAddressLost:
 			// Conflict and Lost belong to the driver and stay as recorded.
 		default: // Retain
-			if addr.Status.Phase != localv1alpha1.IPAddressReleased {
-				addr.Status.Phase = localv1alpha1.IPAddressReleased
+			if markPhase(addr, localv1alpha1.IPAddressReleased) {
 				if err := r.Status().Update(ctx, addr); err != nil {
 					return err
 				}
@@ -241,7 +240,7 @@ func (r *IPAddressClaimReconciler) defaultClassName(ctx context.Context, claim *
 	classes.Items = slices.DeleteFunc(classes.Items, classDeleting)
 	var defaults []string
 	for _, c := range classes.Items {
-		if c.Annotations[localv1alpha1.IsDefaultClassAnnotation] == "true" {
+		if c.Annotations[localv1alpha1.IsDefaultClassAnnotation] == localv1alpha1.AnnotationTrue {
 			defaults = append(defaults, c.Name)
 		}
 	}
