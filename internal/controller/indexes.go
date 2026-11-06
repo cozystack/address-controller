@@ -30,6 +30,9 @@ import (
 // "<namespace>/<name>" of their spec.claimRef.
 const IPAddressClaimRefIndex = "spec.claimRef"
 
+// IPAddressClassNameIndex indexes IPAddress objects by spec.className.
+const IPAddressClassNameIndex = "spec.className"
+
 // ClaimRefIndexKey builds the index key for a claim.
 func ClaimRefIndexKey(namespace, name string) string {
 	return namespace + "/" + name
@@ -38,14 +41,27 @@ func ClaimRefIndexKey(namespace, name string) string {
 // SetupIndexes registers the field indexes shared by the controllers. Call
 // once, before setting up the controllers.
 func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(ctx, &localv1alpha1.IPAddress{}, IPAddressClaimRefIndex,
-		func(o client.Object) []string {
-			addr := o.(*localv1alpha1.IPAddress)
-			if addr.Spec.ClaimRef == nil {
-				return nil
-			}
-			return []string{ClaimRefIndexKey(addr.Spec.ClaimRef.Namespace, addr.Spec.ClaimRef.Name)}
-		})
+	indexer := mgr.GetFieldIndexer()
+	if err := indexer.IndexField(ctx, &localv1alpha1.IPAddress{}, IPAddressClaimRefIndex, claimRefIndex); err != nil {
+		return err
+	}
+	return indexer.IndexField(ctx, &localv1alpha1.IPAddress{}, IPAddressClassNameIndex, classNameIndex)
+}
+
+func claimRefIndex(o client.Object) []string {
+	addr := o.(*localv1alpha1.IPAddress)
+	if addr.Spec.ClaimRef == nil {
+		return nil
+	}
+	return []string{ClaimRefIndexKey(addr.Spec.ClaimRef.Namespace, addr.Spec.ClaimRef.Name)}
+}
+
+func classNameIndex(o client.Object) []string {
+	addr := o.(*localv1alpha1.IPAddress)
+	if addr.Spec.ClassName == "" {
+		return nil
+	}
+	return []string{addr.Spec.ClassName}
 }
 
 // familyOf reports the address family of a textual IP, or "" if it does not
