@@ -58,8 +58,13 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - --leader-elect={{ .Values.controller.leaderElect }}
-            - --metrics-bind-address={{ .Values.controller.metricsBindAddress }}
+            - --metrics-bind-address={{ if .Values.metrics.enabled }}:8443{{ else }}{{ .Values.controller.metricsBindAddress }}{{ end }}
             - --health-probe-bind-address=:8081
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: 8443
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
