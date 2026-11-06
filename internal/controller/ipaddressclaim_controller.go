@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -82,18 +84,28 @@ func (r *IPAddressClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.completePreBindings(ctx, claim, bound); err != nil {
+
+	// Accepting a pre-binding needs the claim's class, so a claim that has
+	// not recorded one resolves it first.
+	className, resolved := "", false
+	if knownClassName(claim) == "" && hasPendingPreBinding(bound) {
+		if className, err = r.resolveClass(ctx, claim); err != nil {
+			return ctrl.Result{}, err
+		}
+		resolved = true
+	}
+	if bound, err = r.acceptPreBindings(ctx, claim, cmp.Or(knownClassName(claim), className), bound); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	className := ""
-	if len(missingFamilies(claim, bound)) > 0 {
-		className, err = r.resolveClass(ctx, claim)
-		if err != nil {
-			return ctrl.Result{}, err
+	if unbound := unboundFamilies(claim, bound); len(unbound) > 0 {
+		if !resolved {
+			if className, err = r.resolveClass(ctx, claim); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		if className != "" {
-			for _, family := range missingFamilies(claim, bound) {
+			for _, family := range unbound {
 				matched, err := r.bindAvailableAddress(ctx, claim, className, family)
 				if err != nil {
 					return ctrl.Result{}, err
@@ -123,20 +135,36 @@ func (r *IPAddressClaimReconciler) finalizeClaim(ctx context.Context, claim *loc
 	if err != nil {
 		return err
 	}
+	// A claim with a controller owner lives and dies with it, so its
+	// addresses are deleted whatever their reclaimPolicy. Removing the
+	// controller reference is how such a claim is retained.
+	owner := metav1.GetControllerOf(claim)
 	for i := range addrs {
 		addr := &addrs[i]
 		if !addr.DeletionTimestamp.IsZero() {
 			continue
 		}
-		switch addr.Spec.ReclaimPolicy {
-		case localv1alpha1.ReclaimDelete:
+		// A pre-binding the claim never accepted is not the claim's to
+		// reclaim; the address controller handles it once the claim is gone.
+		if addr.Spec.ClaimRef.UID == "" && preBindingMismatch(claim, knownClassName(claim), nil, addr) != "" {
+			continue
+		}
+		switch {
+		case owner != nil || addr.Spec.ReclaimPolicy == localv1alpha1.ReclaimDelete:
 			// The driver's own finalizer tears down the backend allocation
 			// before the object goes away.
 			if err := r.Delete(ctx, addr); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
-			r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
-				"IPAddress %s deleted per reclaimPolicy Delete", addr.Name)
+			if owner != nil {
+				r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
+					"IPAddress %s deleted with the claim's owner %s %s", addr.Name, owner.Kind, owner.Name)
+			} else {
+				r.Recorder.Eventf(claim, "Normal", "AddressDeleted",
+					"IPAddress %s deleted per reclaimPolicy Delete", addr.Name)
+			}
+		case addr.Status.Phase == localv1alpha1.IPAddressConflict || addr.Status.Phase == localv1alpha1.IPAddressLost:
+			// Conflict and Lost belong to the driver and stay as recorded.
 		default: // Retain
 			if addr.Status.Phase != localv1alpha1.IPAddressReleased {
 				addr.Status.Phase = localv1alpha1.IPAddressReleased
@@ -150,6 +178,12 @@ func (r *IPAddressClaimReconciler) finalizeClaim(ctx context.Context, claim *loc
 	}
 	controllerutil.RemoveFinalizer(claim, localv1alpha1.ClaimProtectionFinalizer)
 	return r.Update(ctx, claim)
+}
+
+// knownClassName is the class the claim names or has already resolved to,
+// or "" if neither is recorded yet.
+func knownClassName(claim *localv1alpha1.IPAddressClaim) string {
+	return cmp.Or(claim.Spec.ClassName, claim.Status.ClassName)
 }
 
 // resolveClass resolves the claim's class name — spec first, then the sticky
@@ -236,19 +270,67 @@ func (r *IPAddressClaimReconciler) markUnresolved(claim *localv1alpha1.IPAddress
 	})
 }
 
-// completePreBindings accepts driver pre-bound addresses by writing the
-// claim's UID into claimRefs that carry none yet.
-func (r *IPAddressClaimReconciler) completePreBindings(ctx context.Context, claim *localv1alpha1.IPAddressClaim, addrs []localv1alpha1.IPAddress) error {
-	for i := range addrs {
-		addr := &addrs[i]
+// hasPendingPreBinding reports whether any address is pre-bound to the claim
+// by name only, without the claim's UID.
+func hasPendingPreBinding(addrs []localv1alpha1.IPAddress) bool {
+	for _, addr := range addrs {
 		if addr.Spec.ClaimRef.UID == "" {
-			addr.Spec.ClaimRef.UID = claim.UID
-			if err := r.Update(ctx, addr); err != nil {
-				return err
-			}
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+// acceptPreBindings completes pre-bindings — addresses whose claimRef names
+// the claim but carries no UID yet — by writing the claim's UID, as the PV
+// controller does for a pre-bound volume that satisfies its claim. A
+// pre-binding of another class, of a family the claim does not request, or
+// of a family the claim already holds is refused with an event and left
+// out of the returned list. Without a resolved class nothing is accepted.
+func (r *IPAddressClaimReconciler) acceptPreBindings(ctx context.Context, claim *localv1alpha1.IPAddressClaim, className string, addrs []localv1alpha1.IPAddress) ([]localv1alpha1.IPAddress, error) {
+	accepted := make([]localv1alpha1.IPAddress, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr.Spec.ClaimRef.UID != "" {
+			accepted = append(accepted, addr)
+		}
+	}
+	for i := range addrs {
+		addr := &addrs[i]
+		if addr.Spec.ClaimRef.UID != "" || className == "" {
+			continue
+		}
+		if reason := preBindingMismatch(claim, className, accepted, addr); reason != "" {
+			r.Recorder.Eventf(claim, "Warning", "PreBindingRefused",
+				"IPAddress %s is pre-bound to this claim but %s", addr.Name, reason)
+			continue
+		}
+		addr.Spec.ClaimRef.UID = claim.UID
+		if err := r.Update(ctx, addr); err != nil {
+			return nil, err
+		}
+		accepted = append(accepted, *addr)
+	}
+	return accepted, nil
+}
+
+// preBindingMismatch reports why a pre-bound address cannot bind to the
+// claim, or "" if it can. held lists the addresses the claim already holds.
+func preBindingMismatch(claim *localv1alpha1.IPAddressClaim, className string, held []localv1alpha1.IPAddress, addr *localv1alpha1.IPAddress) string {
+	family := familyOf(addr.Spec.Address)
+	switch {
+	case className == "":
+		return "the claim's class is not resolved"
+	case addr.Spec.ClassName != className:
+		return fmt.Sprintf("its class %q is not the claim's class %q", addr.Spec.ClassName, className)
+	case !slices.Contains(requestedFamilies(claim), family):
+		return fmt.Sprintf("the claim does not request family %q", family)
+	}
+	for _, h := range held {
+		if familyOf(h.Spec.Address) == family {
+			return fmt.Sprintf("the claim already holds %s address %s", family, h.Name)
+		}
+	}
+	return ""
 }
 
 // addressesBoundTo lists live addresses whose claimRef names this claim and
@@ -285,6 +367,21 @@ func requestedFamilies(claim *localv1alpha1.IPAddressClaim) []localv1alpha1.Addr
 	default:
 		return []localv1alpha1.AddressFamily{localv1alpha1.FamilyIPv4}
 	}
+}
+
+// unboundFamilies reports which requested families no bound address covers,
+// in any phase. A Lost address still covers its family: the claim keeps it
+// and waits for it to be restored or deleted rather than binding another.
+func unboundFamilies(claim *localv1alpha1.IPAddressClaim, addrs []localv1alpha1.IPAddress) []localv1alpha1.AddressFamily {
+	var unbound []localv1alpha1.AddressFamily
+	for _, family := range requestedFamilies(claim) {
+		if !slices.ContainsFunc(addrs, func(addr localv1alpha1.IPAddress) bool {
+			return familyOf(addr.Spec.Address) == family
+		}) {
+			unbound = append(unbound, family)
+		}
+	}
+	return unbound
 }
 
 // missingFamilies reports which requested families no bound address

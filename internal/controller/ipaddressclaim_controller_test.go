@@ -374,6 +374,170 @@ func TestClaimDeletionDeletePolicyDeletesAddress(t *testing.T) {
 	}
 }
 
+func TestControllerOwnedClaimDeletionDeletesRetainedAddress(t *testing.T) {
+	// The owner rule holds for any controller owner, not only a Service.
+	for _, owner := range []metav1.OwnerReference{
+		{APIVersion: "v1", Kind: serviceKind, Name: "web-lb", UID: testServiceUID, Controller: new(true)},
+		{APIVersion: "local.sdn.cozystack.io/v1alpha1", Kind: "EndpointAttachment", Name: "web", UID: "ea-uid-1", Controller: new(true)},
+	} {
+		t.Run(owner.Kind, func(t *testing.T) {
+			claim := pendingClaim(testClassName)
+			claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
+			claim.OwnerReferences = []metav1.OwnerReference{owner}
+			addr := boundAddress("ip-owned", "203.0.113.13", localv1alpha1.IPAddressBound)
+			c := testClient(t, publicClass(nil), claim, addr)
+			if err := c.Delete(context.Background(), claim); err != nil {
+				t.Fatal(err)
+			}
+			reconcileClaim(t, claimReconciler(c))
+
+			err := c.Get(context.Background(), types.NamespacedName{Name: "ip-owned"}, &localv1alpha1.IPAddress{})
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("address of a %s-owned claim survived the claim under Retain: %v", owner.Kind, err)
+			}
+		})
+	}
+}
+
+func TestClaimDeletionLeavesConflictAndLostUntouched(t *testing.T) {
+	for _, phase := range []localv1alpha1.IPAddressPhase{localv1alpha1.IPAddressConflict, localv1alpha1.IPAddressLost} {
+		t.Run(string(phase), func(t *testing.T) {
+			claim := pendingClaim(testClassName)
+			claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
+			c := testClient(t, publicClass(nil), claim, boundAddress("ip-sticky", "203.0.113.15", phase))
+			if err := c.Delete(context.Background(), claim); err != nil {
+				t.Fatal(err)
+			}
+			reconcileClaim(t, claimReconciler(c))
+
+			if got := getAddress(t, c, "ip-sticky").Status.Phase; got != phase {
+				t.Errorf("address phase = %q, want %q kept", got, phase)
+			}
+		})
+	}
+}
+
+func TestLostAddressIsNotReplaced(t *testing.T) {
+	// A Lost address keeps its family covered: the claim reports Lost and
+	// waits instead of binding a second address of the same family.
+	claim := pendingClaim(testClassName)
+	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
+	claim.Status = localv1alpha1.IPAddressClaimStatus{Phase: localv1alpha1.ClaimBound, ClassName: testClassName}
+	spare := &localv1alpha1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ip-spare"},
+		Spec: localv1alpha1.IPAddressSpec{
+			ClassName: testClassName,
+			Address:   "203.0.113.17",
+			Source:    localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
+		},
+		Status: localv1alpha1.IPAddressStatus{Phase: localv1alpha1.IPAddressAvailable},
+	}
+	c := testClient(t, publicClass(nil), claim, boundAddress("ip-lost", "203.0.113.16", localv1alpha1.IPAddressLost), spare)
+	reconcileClaim(t, claimReconciler(c))
+
+	if ref := getAddress(t, c, "ip-spare").Spec.ClaimRef; ref != nil {
+		t.Errorf("spare address bound to the claim (%+v); a Lost address must not be replaced", ref)
+	}
+	got := getClaim(t, c)
+	if got.Status.Phase != localv1alpha1.ClaimLost {
+		t.Errorf("phase = %q, want Lost", got.Status.Phase)
+	}
+	if len(got.Status.Addresses) != 1 || got.Status.Addresses[0].Name != "ip-lost" {
+		t.Errorf("status.addresses = %+v, want the Lost address kept", got.Status.Addresses)
+	}
+}
+
+func TestClaimRefusesMismatchedPreBinding(t *testing.T) {
+	cases := map[string]*localv1alpha1.IPAddress{
+		"other class":        preBoundAddress("203.0.113.18", "private"),
+		"unrequested family": preBoundAddress("2001:db8::18", testClassName),
+	}
+	for name, addr := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := testClient(t, publicClass(nil), pendingClaim(testClassName), addr)
+			reconcileClaim(t, claimReconciler(c))
+
+			if got := getAddress(t, c, "ip-pre").Spec.ClaimRef.UID; got != "" {
+				t.Errorf("claimRef.uid = %q, want the pre-binding left incomplete", got)
+			}
+			if got := getClaim(t, c); len(got.Status.Addresses) != 0 {
+				t.Errorf("status.addresses = %+v, want the refused address left out", got.Status.Addresses)
+			}
+		})
+	}
+}
+
+func TestDefaultClassClaimAcceptsPreBinding(t *testing.T) {
+	// A claim naming no class resolves the default before judging a
+	// pre-binding against it.
+	c := testClient(t, defaultClass(), pendingClaim(""), preBoundAddress("203.0.113.22", testClassName))
+	reconcileClaim(t, claimReconciler(c))
+
+	if got := getAddress(t, c, "ip-pre").Spec.ClaimRef.UID; got != testClaimUID {
+		t.Errorf("claimRef.uid = %q, want the pre-binding accepted", got)
+	}
+	if got := getClaim(t, c); got.Status.Phase != localv1alpha1.ClaimBound || got.Status.ClassName != testClassName {
+		t.Errorf("phase = %q, className = %q, want Bound to %q", got.Status.Phase, got.Status.ClassName, testClassName)
+	}
+}
+
+func TestClaimRefusesSecondPreBindingOfAFamily(t *testing.T) {
+	held := boundAddress("ip-held", "203.0.113.19", localv1alpha1.IPAddressBound)
+	c := testClient(t, publicClass(nil), pendingClaim(testClassName), held,
+		preBoundAddress("203.0.113.20", testClassName))
+	reconcileClaim(t, claimReconciler(c))
+
+	if got := getAddress(t, c, "ip-pre").Spec.ClaimRef.UID; got != "" {
+		t.Errorf("claimRef.uid = %q, want a second IPv4 pre-binding refused", got)
+	}
+}
+
+func TestOwnedClaimDeletionSparesRefusedPreBinding(t *testing.T) {
+	claim := pendingClaim(testClassName)
+	claim.Finalizers = []string{localv1alpha1.ClaimProtectionFinalizer}
+	claim.Status.ClassName = testClassName
+	claim.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "v1", Kind: serviceKind, Name: "web-lb", UID: testServiceUID, Controller: new(true),
+	}}
+	c := testClient(t, publicClass(nil), claim, preBoundAddress("203.0.113.21", "private"))
+	if err := c.Delete(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	reconcileClaim(t, claimReconciler(c))
+
+	getAddress(t, c, "ip-pre") // fails the test if the address was deleted
+}
+
+// boundAddress is an address bound to the test claim, UID included.
+func boundAddress(name, ip string, phase localv1alpha1.IPAddressPhase) *localv1alpha1.IPAddress {
+	return &localv1alpha1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: localv1alpha1.IPAddressSpec{
+			ClassName:     testClassName,
+			Address:       ip,
+			ReclaimPolicy: localv1alpha1.ReclaimRetain,
+			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName, UID: testClaimUID},
+			Source:        localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
+		},
+		Status: localv1alpha1.IPAddressStatus{Phase: phase},
+	}
+}
+
+// preBoundAddress is the address "ip-pre", pre-bound to the test claim by
+// name only.
+func preBoundAddress(ip, className string) *localv1alpha1.IPAddress {
+	return &localv1alpha1.IPAddress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ip-pre"},
+		Spec: localv1alpha1.IPAddressSpec{
+			ClassName:     className,
+			Address:       ip,
+			ReclaimPolicy: localv1alpha1.ReclaimRetain,
+			ClaimRef:      &localv1alpha1.ClaimReference{Namespace: testNamespace, Name: testClaimName},
+			Source:        localv1alpha1.IPAddressSource{FromClass: &localv1alpha1.FromClassSource{}},
+		},
+	}
+}
+
 func TestBoundClaimSurvivesClassDeletion(t *testing.T) {
 	// A fully bound claim must reconcile without touching its class:
 	// deleting the class breaks neither the binding nor status upkeep.
