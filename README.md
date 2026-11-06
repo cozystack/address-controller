@@ -125,6 +125,20 @@ The controller image is published as
 by the release workflow on every push to main.
 
 
+## Admission policy
+
+A tenant who can create claims can set `spec.addressName` and bind any
+`Available` address of a class by name. The chart can install a
+`ValidatingAdmissionPolicy` (`admissionPolicy.enabled`, off by default)
+that reserves setting, changing or removing the field to allowlisted
+principals; writes that leave it unchanged pass. Scope it with
+`admissionPolicy.namespaceSelector`, list admins and, in a brokered
+deployment, the machinery that moves addresses between namespaces in
+`allowedUsernames`/`allowedGroups`, and run it with
+`validationActions: [Warn, Audit]` before `Deny`. Which classes a namespace
+may claim from at all is not checked; that is the entitlement object the
+design proposal leaves open.
+
 ## Metrics
 
 With `metrics.enabled`, the controller serves metrics over HTTPS on port

@@ -35,3 +35,22 @@ metrics:
     # Alerts on Conflict and Lost addresses and on long-Pending claims;
     # rendered only where monitoring.coreos.com exists.
     enabled: false
+
+# Optional ValidatingAdmissionPolicy reserving IPAddressClaim.spec.addressName,
+# which binds one specific Available address of a class, to the principals
+# below. Writes that leave the field as it was are always admitted. In a
+# brokered deployment, allowlist the machinery that moves addresses between
+# namespaces.
+admissionPolicy:
+  enabled: false
+  # [Deny], or e.g. [Warn, Audit] to observe what would be denied first.
+  validationActions: [Deny]
+  # Namespaces the policy applies to; scope it to tenant namespaces.
+  namespaceSelector: {}
+  # Admission policies bind system:masters too, so cluster admins must be
+  # listed; kubeadm since 1.29 issues admin credentials in
+  # kubeadm:cluster-admins instead.
+  allowedUsernames: []
+  allowedGroups:
+    - system:masters
+    - kubeadm:cluster-admins
