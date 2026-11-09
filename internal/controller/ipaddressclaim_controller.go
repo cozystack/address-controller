@@ -236,6 +236,9 @@ func (r *IPAddressClaimReconciler) defaultClassName(ctx context.Context, claim *
 	if err := r.List(ctx, classes); err != nil {
 		return "", err
 	}
+	// A deleted class is held only until its addresses are gone; drawing
+	// new claims into it would keep it from draining.
+	classes.Items = slices.DeleteFunc(classes.Items, classDeleting)
 	var defaults []string
 	for _, c := range classes.Items {
 		if c.Annotations[localv1alpha1.IsDefaultClassAnnotation] == "true" {
