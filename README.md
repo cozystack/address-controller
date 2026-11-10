@@ -130,18 +130,33 @@ by the release workflow on every push to main.
 With `metrics.enabled`, the controller serves metrics over HTTPS on port
 8443 behind the Service `address-controller-metrics`. Scrapes are
 authenticated and authorized against the API server, so the scraper's
-identity needs the `address-controller-metrics-reader` ClusterRole. Besides
-the controller-runtime metrics, two gauges count the ledger:
+identity needs the `address-controller-metrics-reader` ClusterRole, for
+example:
+
+```sh
+kubectl create clusterrolebinding prometheus-address-controller-metrics \
+  --clusterrole=address-controller-metrics-reader \
+  --serviceaccount=<prometheus-namespace>:<prometheus-serviceaccount>
+```
+
+Besides the controller-runtime metrics, two gauges count the ledger:
 
 | metric | labels |
 |---|---|
 | `address_controller_ipaddresses` | `class`, `phase` |
 | `address_controller_ipaddressclaims` | `namespace`, `class` (resolved), `phase` |
 
+Claims are the billable unit, as `PersistentVolumeClaim`s are for storage: a
+claim holds its addresses whether or not a Service uses them, so
+`address_controller_ipaddressclaims{phase="Bound"}` counts what each
+namespace holds.
+
 `metrics.serviceMonitor.enabled` and `metrics.prometheusRule.enabled` add a
 `ServiceMonitor` and alerts where the `monitoring.coreos.com` API exists:
 addresses in `Conflict` or `Lost` for 5 minutes, and claims `Pending` for
-15 minutes.
+15 minutes. `metrics.serviceMonitor.labels` adds labels to the
+`ServiceMonitor`, for a Prometheus `serviceMonitorSelector`.
+
 ## Development
 
 ```sh

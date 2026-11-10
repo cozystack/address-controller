@@ -29,8 +29,13 @@ metrics:
   enabled: false
   serviceMonitor:
     # A monitoring.coreos.com ServiceMonitor for the Service; rendered only
-    # where that API exists.
+    # where that API exists. The scraping Prometheus's ServiceAccount still
+    # needs a ClusterRoleBinding to address-controller-metrics-reader, which
+    # the chart cannot create without knowing that ServiceAccount.
     enabled: false
+    # Extra labels on the ServiceMonitor, e.g. to match a Prometheus
+    # serviceMonitorSelector.
+    labels: {}
   prometheusRule:
     # Alerts on Conflict and Lost addresses and on long-Pending claims;
     # rendered only where monitoring.coreos.com exists.
