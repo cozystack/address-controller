@@ -271,10 +271,10 @@ State machine (core-owned transitions solid, driver-owned dashed):
 
 ```
    (new) ──► Pending ──► Available ◄────────────────┐
-   (invalid     │            │  ▲                   │ admin clears
+   (invalid     │            │  ▲                   │ admin clears claimRef,
     address     │       core matches / driver       │ claimRef
     stays       │       pre-binds + core accepts    │
-    Pending)    │            ▼  │                   │
+    Pending)    │            ▼  │                   │ or releaseDelay elapses
                 │          Bound ───────────────► Released
                 │            ┆      claim deleted     │
                 │            ┆      (Retain)          │ (Delete: object
@@ -301,7 +301,8 @@ Each pass:
 5. **Unbound.** No `claimRef` → `Available`. This single rule is also the
    recycling path: an admin clears the `claimRef` of a `Released` address
    and it becomes matchable again — the deliberate, manual step PV
-   semantics prescribe for `Retain`.
+   semantics prescribe for `Retain`. A class may automate the step with
+   `spec.releaseDelay` (step 7).
 6. **Bound.** With a `claimRef`:
    - claim exists, UID matches → `Bound`;
    - claim exists, `claimRef.uid` empty → wait (the claim reconciler is
@@ -313,6 +314,16 @@ Each pass:
      `Released`). This duplicates the claim-side flow on purpose: reclaim
      must happen even if the claim vanished without its finalizer running
      (e.g. the finalizer was force-removed).
+7. **Release delay.** A `Released` address of a class with
+   `spec.releaseDelay` has its `claimRef` cleared once the delay has passed
+   since it was released, and step 5 makes it `Available`. The release time
+   is the `lastTransitionTime` of the address's `Bound` condition, which
+   the core sets with every phase it owns (`True` for `Bound`; `False` with
+   reason `Available`, `Released` or `Pending` otherwise). An address
+   annotated `ipaddress.local.sdn.cozystack.io/held: "true"` is exempt and
+   stays `Released` until an admin acts. An address `Released` before this
+   condition existed is dated from the first pass that sets it. Changing a
+   class's delay re-evaluates its `Released` addresses.
 
 ## 6. The reclaim flow (claim deletion)
 

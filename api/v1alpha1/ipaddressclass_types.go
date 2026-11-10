@@ -53,6 +53,14 @@ type IPAddressClassSpec struct {
 	// +kubebuilder:default=Retain
 	ReclaimPolicy ReclaimPolicy `json:"reclaimPolicy,omitempty"`
 
+	// releaseDelay, under reclaimPolicy Retain, returns a Released address
+	// of this class to Available once it has been Released this long: the
+	// core controller clears its claimRef. Unset keeps a Released address
+	// until an admin clears it. An address annotated
+	// ipaddress.local.sdn.cozystack.io/held: "true" is exempt.
+	// +optional
+	ReleaseDelay *metav1.Duration `json:"releaseDelay,omitempty"`
+
 	// parameters is an opaque, driver-specific configuration blob (for
 	// example the address ranges to carve from). The core controller never
 	// interprets it.
