@@ -124,6 +124,53 @@ The controller image is published as
 `ghcr.io/cozystack/address-controller:main` (plus `main-<sha>` and semver tags)
 by the release workflow on every push to main.
 
+
+## Admission policy
+
+A tenant who can create claims can set `spec.addressName` and bind any
+`Available` address of a class by name. The chart can install a
+`ValidatingAdmissionPolicy` (`admissionPolicy.enabled`, off by default)
+that reserves setting, changing or removing the field to allowlisted
+principals; writes that leave it unchanged pass. Scope it with
+`admissionPolicy.namespaceSelector`, list admins and, in a brokered
+deployment, the machinery that moves addresses between namespaces in
+`allowedUsernames`/`allowedGroups`, and run it with
+`validationActions: [Warn, Audit]` before `Deny`. Which classes a namespace
+may claim from at all is not checked; that is the entitlement object the
+design proposal leaves open.
+
+## Metrics
+
+With `metrics.enabled`, the controller serves metrics over HTTPS on port
+8443 behind the Service `address-controller-metrics`. Scrapes are
+authenticated and authorized against the API server, so the scraper's
+identity needs the `address-controller-metrics-reader` ClusterRole, for
+example:
+
+```sh
+kubectl create clusterrolebinding prometheus-address-controller-metrics \
+  --clusterrole=address-controller-metrics-reader \
+  --serviceaccount=<prometheus-namespace>:<prometheus-serviceaccount>
+```
+
+Besides the controller-runtime metrics, two gauges count the ledger:
+
+| metric | labels |
+|---|---|
+| `address_controller_ipaddresses` | `class`, `phase` |
+| `address_controller_ipaddressclaims` | `namespace`, `class` (resolved), `phase` |
+
+Claims are the billable unit, as `PersistentVolumeClaim`s are for storage: a
+claim holds its addresses whether or not a Service uses them, so
+`address_controller_ipaddressclaims{phase="Bound"}` counts what each
+namespace holds.
+
+`metrics.serviceMonitor.enabled` and `metrics.prometheusRule.enabled` add a
+`ServiceMonitor` and alerts where the `monitoring.coreos.com` API exists:
+addresses in `Conflict` or `Lost` for 5 minutes, and claims `Pending` for
+15 minutes. `metrics.serviceMonitor.labels` adds labels to the
+`ServiceMonitor`, for a Prometheus `serviceMonitorSelector`.
+
 ## Development
 
 ```sh
