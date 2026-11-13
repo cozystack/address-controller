@@ -124,6 +124,9 @@ The controller image is published as
 `ghcr.io/cozystack/address-controller:main` (plus `main-<sha>` and semver tags)
 by the release workflow on every push to main.
 
+Adopting addresses Services already hold, removing the controllers, and the
+CRD changes each release makes are in [docs/operating.md](docs/operating.md).
+
 
 ## Admission policy
 
