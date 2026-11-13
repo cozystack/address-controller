@@ -121,4 +121,4 @@ still set it, so every release states its schema changes:
 | release | schema change |
 |---|---|
 | v0.1.0 | initial `IPAddress`, `IPAddressClaim`, `IPAddressClass` |
-| unreleased | `IPAddressClass.spec.releaseDelay` added; `IPAddress` gains a core-set `Bound` condition |
+| v0.2.0 | `IPAddressClass.spec.releaseDelay` added; `IPAddress` gains a core-set `Bound` condition |
