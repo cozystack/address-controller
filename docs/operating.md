@@ -9,7 +9,23 @@ A Service pinned by hand to an address of a class's range keeps it while
 it moves under the ledger, because the driver's pin equals the existing
 one:
 
-1. Create an `IPAddressClaim` in the Service's namespace, naming the class.
+1. Create an `IPAddressClaim` in the Service's namespace that names the
+   class and, in `spec.addressName`, the `IPAddress` of step 2. The MetalLB
+   driver does not provision for a claim that names an address, so the
+   claim waits `Pending` for that one. Where the optional `spec.addressName` admission
+   policy is enabled, this takes an allowlisted principal.
+
+   ```yaml
+   apiVersion: local.sdn.cozystack.io/v1alpha1
+   kind: IPAddressClaim
+   metadata:
+     name: web
+     namespace: tenant-a
+   spec:
+     className: public
+     addressName: ip-203-0-113-7
+   ```
+
 2. Create the `IPAddress` pre-bound to it:
 
    ```yaml
@@ -31,8 +47,14 @@ one:
 3. Annotate the Service with `local.sdn.cozystack.io/ip-address-claim: web`.
    The driver records the association and pins the same address.
 
-The hand-written pin stays on the Service. Under the driver's admission
-policy, removing it later takes an allowlisted principal.
+The hand-written pin stays on the Service. Where metallb-iad's optional
+admission policy is enabled, removing it later takes an allowlisted
+principal. Without that policy, removing it is not gated, and only the
+driver's conflict detection reports the address going to another Service.
+
+Creating the `IPAddress` before the claim does not work: an address whose
+`claimRef` names a missing claim is reclaimed at once, `Released` under
+`Retain` and deleted under `Delete`.
 
 ## Removing the controllers
 
@@ -70,6 +92,23 @@ done
 The group suffix matters: `ipaddresses` alone resolves to the Kubernetes
 `networking.k8s.io` kind. Backend state the driver would have released,
 such as MetalLB placeholder Services, is then left for you to delete.
+
+### Deleting a class
+
+A class is held until no `IPAddress` of it is left, in any phase. Under
+`reclaimPolicy: Retain` a deleted claim leaves its addresses `Released`,
+and a class's `releaseDelay` returns them to `Available` rather than
+deleting them, so a class that has served claims keeps addresses that hold
+it. Delete those `IPAddress` objects, and the class goes. Until then the
+class reports a `ClassInUse` event naming them.
+
+## Quarantining an address
+
+`ipaddress.local.sdn.cozystack.io/held: "true"` on a `Released` address
+keeps its class's `releaseDelay` from returning it to the pool. The
+annotation pauses the return, not the delay: removing it from an address
+that has been `Released` for longer than `releaseDelay` returns the
+address on the next pass.
 
 ## Upgrading the CRDs
 
