@@ -279,6 +279,11 @@ func (in *IPAddressClassSpec) DeepCopyInto(out *IPAddressClassSpec) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.LoadBalancerClass != nil {
+		in, out := &in.LoadBalancerClass, &out.LoadBalancerClass
+		*out = new(string)
+		**out = **in
+	}
 	if in.Parameters != nil {
 		in, out := &in.Parameters, &out.Parameters
 		*out = new(runtime.RawExtension)

@@ -20,6 +20,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -66,23 +67,31 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	className := svc.Annotations[localv1alpha1.ServiceClassAnnotation]
-	if className == "" {
-		var err error
-		className, err = r.autoClaimClassName(ctx, svc)
-		if err != nil || className == "" {
-			return ctrl.Result{}, err
+	class, err := r.serviceClass(ctx, svc)
+	if err != nil || class == nil {
+		return ctrl.Result{}, err
+	}
+	if !sameLoadBalancerClass(svc.Spec.LoadBalancerClass, class.Spec.LoadBalancerClass) {
+		// The Service reaches another load-balancer implementation than
+		// the one owning the class's pool. Left alone when the class is the
+		// marked one; reported when the Service named it.
+		if svc.Annotations[localv1alpha1.ServiceClassAnnotation] != "" {
+			r.Recorder.Eventf(svc, "Warning", localv1alpha1.ReasonLoadBalancerClassMismatch,
+				"Service loadBalancerClass %s does not match IPAddressClass %q loadBalancerClass %s",
+				describeLoadBalancerClass(svc.Spec.LoadBalancerClass), class.Name,
+				describeLoadBalancerClass(class.Spec.LoadBalancerClass))
 		}
+		return ctrl.Result{}, nil
 	}
 
 	claim := &localv1alpha1.IPAddressClaim{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}, claim)
+	err = r.Get(ctx, types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}, claim)
 	switch {
 	case apierrors.IsNotFound(err):
 		claim = &localv1alpha1.IPAddressClaim{
 			ObjectMeta: metav1.ObjectMeta{Namespace: svc.Namespace, Name: svc.Name},
 			Spec: localv1alpha1.IPAddressClaimSpec{
-				ClassName: className,
+				ClassName: class.Name,
 				Family:    familyForService(svc),
 			},
 		}
@@ -132,9 +141,9 @@ var backendAddressInputs = []string{
 }
 
 // wantsAutoClaim reports whether a Service qualifies for auto-claim: a live
-// LoadBalancer Service that names no claim, has not opted out, is not left
-// to another load-balancer implementation, carries no backend pool or pin
-// input, and has no address yet. The last rule keeps a Service addressed by
+// LoadBalancer Service that names no claim, has not opted out, carries no
+// backend pool or pin input, and has no address yet. Whether its
+// loadBalancerClass matches the class's is checked once the class is known. The last rule keeps a Service addressed by
 // other means — before auto-claim existed, or from an auto-assigning pool —
 // from being moved to a new address.
 func wantsAutoClaim(svc *corev1.Service) bool {
@@ -142,7 +151,6 @@ func wantsAutoClaim(svc *corev1.Service) bool {
 		svc.DeletionTimestamp.IsZero() &&
 		svc.Annotations[localv1alpha1.ServiceClaimAnnotation] == "" &&
 		svc.Annotations[localv1alpha1.ServiceAutoClaimAnnotation] != "false" &&
-		svc.Spec.LoadBalancerClass == nil &&
 		svc.Spec.LoadBalancerIP == "" &&
 		!slices.ContainsFunc(backendAddressInputs, func(key string) bool {
 			_, ok := svc.Annotations[key]
@@ -151,33 +159,75 @@ func wantsAutoClaim(svc *corev1.Service) bool {
 		len(svc.Status.LoadBalancer.Ingress) == 0
 }
 
-// autoClaimClassName finds the single IPAddressClass marked for auto-claim.
+// serviceClass returns the class a Service's auto-claim draws from: the one
+// its class annotation names, else the single class marked for auto-claim.
+// Nil means nothing is claimed for now. A named class that does not exist
+// is recorded on the Service; creating it requeues the Service.
+func (r *ServiceReconciler) serviceClass(ctx context.Context, svc *corev1.Service) (*localv1alpha1.IPAddressClass, error) {
+	name := svc.Annotations[localv1alpha1.ServiceClassAnnotation]
+	if name == "" {
+		return r.autoClaimClass(ctx, svc)
+	}
+	class := &localv1alpha1.IPAddressClass{}
+	err := r.Get(ctx, types.NamespacedName{Name: name}, class)
+	if apierrors.IsNotFound(err) {
+		r.Recorder.Eventf(svc, "Warning", localv1alpha1.ReasonClassNotFound,
+			"IPAddressClass %q not found", name)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return class, nil
+}
+
+// sameLoadBalancerClass reports whether two loadBalancerClass values are
+// equal, both unset counting as equal.
+func sameLoadBalancerClass(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func describeLoadBalancerClass(v *string) string {
+	if v == nil {
+		return "(unset)"
+	}
+	return strconv.Quote(*v)
+}
+
+// autoClaimClass finds the single IPAddressClass marked for auto-claim.
 // None means auto-claim is off and the Service is left alone; more than one
 // is recorded on the Service and nothing is claimed.
-func (r *ServiceReconciler) autoClaimClassName(ctx context.Context, svc *corev1.Service) (string, error) {
+func (r *ServiceReconciler) autoClaimClass(ctx context.Context, svc *corev1.Service) (*localv1alpha1.IPAddressClass, error) {
 	classes := &localv1alpha1.IPAddressClassList{}
 	if err := r.List(ctx, classes); err != nil {
-		return "", err
+		return nil, err
 	}
 	// A deleted class is held only until its addresses are gone; drawing
 	// new claims into it would keep it from draining.
 	classes.Items = slices.DeleteFunc(classes.Items, classDeleting)
-	var marked []string
+	var marked []localv1alpha1.IPAddressClass
 	for _, c := range classes.Items {
 		if c.Annotations[localv1alpha1.IsAutoClaimClassAnnotation] == localv1alpha1.AnnotationTrue {
-			marked = append(marked, c.Name)
+			marked = append(marked, c)
 		}
 	}
 	switch len(marked) {
 	case 0:
-		return "", nil
+		return nil, nil
 	case 1:
-		return marked[0], nil
+		return &marked[0], nil
 	default:
-		sort.Strings(marked)
+		names := make([]string, 0, len(marked))
+		for _, c := range marked {
+			names = append(names, c.Name)
+		}
+		sort.Strings(names)
 		r.Recorder.Eventf(svc, "Warning", localv1alpha1.ReasonMultipleAutoClaimClasses,
-			"multiple IPAddressClasses marked for auto-claim: %v", marked)
-		return "", nil
+			"multiple IPAddressClasses marked for auto-claim: %v", names)
+		return nil, nil
 	}
 }
 
