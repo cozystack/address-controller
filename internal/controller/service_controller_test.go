@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -178,7 +180,9 @@ func TestAutoClaimWithMultipleMarkedClassesClaimsNothing(t *testing.T) {
 func TestAutoClaimUsesClassNamedByService(t *testing.T) {
 	svc := loadBalancerService()
 	svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: otherClassName}
-	c := testClient(t, autoClaimClass(testClassName), svc)
+	named := publicClass(nil)
+	named.Name = otherClassName
+	c := testClient(t, autoClaimClass(testClassName), named, svc)
 	reconcileService(t, serviceReconciler(c))
 
 	claim := getAutoClaim(t, c)
@@ -187,6 +191,76 @@ func TestAutoClaimUsesClassNamedByService(t *testing.T) {
 	}
 	if claim.Spec.ClassName != otherClassName {
 		t.Errorf("claim className = %q, want the Service's %q", claim.Spec.ClassName, otherClassName)
+	}
+}
+
+func TestAutoClaimWaitsForClassNamedByService(t *testing.T) {
+	svc := loadBalancerService()
+	svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: otherClassName}
+	c := testClient(t, autoClaimClass(testClassName), svc)
+	r := serviceReconciler(c)
+	reconcileService(t, r)
+
+	if claim := getAutoClaim(t, c); claim != nil {
+		t.Error("claim auto-provisioned from a class that does not exist")
+	}
+	if !recorded(r, "Warning "+localv1alpha1.ReasonClassNotFound) {
+		t.Errorf("no %s event recorded", localv1alpha1.ReasonClassNotFound)
+	}
+}
+
+func TestAutoClaimMatchesLoadBalancerClass(t *testing.T) {
+	cases := map[string]struct {
+		service, class *string
+		claimed        bool
+	}{
+		"both unset":                   {nil, nil, true},
+		"equal":                        {new("example.com/lb"), new("example.com/lb"), true},
+		"class sets one, Service none": {nil, new("example.com/lb"), false},
+		"Service sets one, class none": {new("example.com/lb"), nil, false},
+		"different":                    {new("example.com/other"), new("example.com/lb"), false},
+	}
+	for name, tc := range cases {
+		for _, named := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, class named by Service %t", name, named), func(t *testing.T) {
+				svc := loadBalancerService()
+				svc.Spec.LoadBalancerClass = tc.service
+				class := autoClaimClass(testClassName)
+				if named {
+					class.Annotations = nil
+					svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: testClassName}
+				}
+				class.Spec.LoadBalancerClass = tc.class
+				c := testClient(t, class, svc)
+				r := serviceReconciler(c)
+				reconcileService(t, r)
+
+				if claimed := getAutoClaim(t, c) != nil; claimed != tc.claimed {
+					t.Errorf("claimed = %t, want %t", claimed, tc.claimed)
+				}
+				// Only a class the Service named itself warrants a warning;
+				// the marked class simply does not serve this Service.
+				wantWarning := named && !tc.claimed
+				if got := recorded(r, "Warning "+localv1alpha1.ReasonLoadBalancerClassMismatch); got != wantWarning {
+					t.Errorf("%s event recorded = %t, want %t", localv1alpha1.ReasonLoadBalancerClassMismatch, got, wantWarning)
+				}
+			})
+		}
+	}
+}
+
+// recorded reports whether the reconciler recorded an event starting with
+// prefix ("<type> <reason>"), draining what it recorded so far.
+func recorded(r *ServiceReconciler, prefix string) bool {
+	events := r.Recorder.(*record.FakeRecorder).Events
+	found := false
+	for {
+		select {
+		case e := <-events:
+			found = found || strings.HasPrefix(e, prefix+" ")
+		default:
+			return found
+		}
 	}
 }
 

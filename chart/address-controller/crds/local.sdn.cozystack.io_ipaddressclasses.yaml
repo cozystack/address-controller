@@ -53,6 +53,18 @@ spec:
           spec:
             description: IPAddressClassSpec defines the desired state of IPAddressClass.
             properties:
+              loadBalancerClass:
+                description: |-
+                  loadBalancerClass is the spec.loadBalancerClass a Service consuming a
+                  claim of this class must carry, so that the Service reaches the
+                  load-balancer implementation that owns this class's pool. Unset means
+                  the cluster's default implementation: such a Service carries no
+                  loadBalancerClass. The core controller never sets it on a Service.
+                  Immutable, including setting or unsetting it after creation: a
+                  Service's own loadBalancerClass cannot change once set, so a new value
+                  would strand every Service already rendered for the class.
+                minLength: 1
+                type: string
               parameters:
                 description: |-
                   parameters is an opaque, driver-specific configuration blob (for
@@ -91,6 +103,11 @@ spec:
             required:
             - provisioner
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .loadBalancerClass
+              message: loadBalancerClass is immutable
+              rule: has(self.loadBalancerClass) == has(oldSelf.loadBalancerClass)
+                && (!has(self.loadBalancerClass) || self.loadBalancerClass == oldSelf.loadBalancerClass)
         type: object
     served: true
     storage: true

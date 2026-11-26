@@ -112,4 +112,7 @@ const (
 	ReasonAutoClaimed              = "AutoClaimed"
 	ReasonAutoClaimNameTaken       = "AutoClaimNameTaken"
 	ReasonMultipleAutoClaimClasses = "MultipleAutoClaimClasses"
+	// ReasonLoadBalancerClassMismatch is recorded when a Service names a
+	// class whose loadBalancerClass differs from its own.
+	ReasonLoadBalancerClassMismatch = "LoadBalancerClassMismatch"
 )

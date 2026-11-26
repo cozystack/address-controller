@@ -47,6 +47,13 @@ StorageClass names a CSI driver.
   provisioned `IPAddress`, where it takes effect. What each policy
   actually reclaims — the API object, the ledger entry, backend state —
   is spelled out in §6.
+- `spec.loadBalancerClass` (immutable, including setting or unsetting it)
+  — the `spec.loadBalancerClass` a Service consuming a claim of this class
+  must carry, so the Service reaches the load-balancer implementation that
+  owns the class's pool. Unset means the cluster's default implementation,
+  and the Service carries none. Immutable because a Service's own
+  `loadBalancerClass` cannot change once set: a new value would strand
+  every Service already rendered for the class.
 - `spec.parameters` — an opaque object (unknown fields preserved), never
   read by the core. Shape is defined by the driver.
 - The annotation `ipaddressclass.local.sdn.cozystack.io/is-default-class:
@@ -411,8 +418,10 @@ integration. Its obligations:
    Service's *own* namespace — cross-namespace sharing is not a thing),
    translate it into the backend's pin mechanism, maintain
    `status.associatedTo`, and enforce that one claim serves one workload
-   at a time. Disassociation must leave the address `Bound` — reserved,
-   inert.
+   at a time. A Service whose `spec.loadBalancerClass` differs from its
+   claim's class's `spec.loadBalancerClass` reaches another implementation
+   and is not associated. Disassociation must leave the address `Bound` —
+   reserved, inert.
 6. **Detect, and clear, conflicts.** If the backend hands the reserved
    address to a workload the binding does not authorize, set phase
    `Conflict` (and `Lost` if the backing reservation disappears). The
@@ -476,8 +485,7 @@ A Service qualifies when it is a live `type: LoadBalancer` Service that:
 - carries no `local.sdn.cozystack.io/ip-address-claim` annotation,
 - does not carry `local.sdn.cozystack.io/auto-claim: "false"` (drivers
   stamp this on Services they create for their own bookkeeping),
-- sets neither `spec.loadBalancerClass` (another implementation's) nor
-  `spec.loadBalancerIP` (asks for a specific address),
+- does not set `spec.loadBalancerIP` (asks for a specific address),
 - carries none of the backend's pool, pin or sharing annotations: for
   MetalLB, `loadBalancerIPs`, `address-pool` and `allow-shared-ip` under
   `metallb.io/` or `metallb.universe.tf/`. Such a Service has chosen its
@@ -490,7 +498,16 @@ The class is the one named by the Service's
 `local.sdn.cozystack.io/ip-address-class` annotation, else the single class
 marked `is-auto-claim-class`. With no marked class the Service is left
 alone; with several, a warning event is recorded on it and nothing is
-claimed.
+claimed. A named class that does not exist is reported the same way, and
+the Service is claimed once the class is created.
+
+The Service's `spec.loadBalancerClass` must equal the class's, both unset
+counting as equal; otherwise the Service reaches another load-balancer
+implementation than the one owning the class's pool, and nothing is
+claimed. The core cannot fix the Service, whose `loadBalancerClass` is
+immutable once set. A mismatch with the marked class is silent, since that
+class simply does not serve the Service; a mismatch with a class the
+Service named is a warning event.
 
 The core then creates an `IPAddressClaim` named after the Service, in the
 Service's namespace, with that `className`, the family derived from the

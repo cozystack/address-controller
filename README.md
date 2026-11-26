@@ -18,7 +18,7 @@ All kinds live in the `local.sdn.cozystack.io/v1alpha1` API group.
 
 | storage | addresses | scope | role |
 |---|---|---|---|
-| `StorageClass` | `IPAddressClass` | cluster | which pool, which driver (`spec.provisioner`), which reclaim policy |
+| `StorageClass` | `IPAddressClass` | cluster | which pool, which driver (`spec.provisioner`), which reclaim policy, which load-balancer implementation (`spec.loadBalancerClass`) |
 | `PersistentVolume` | `IPAddress` | cluster | the address itself, with a `claimRef`, a reclaim policy, and a `fromClass`/`providerRef` source union |
 | `PersistentVolumeClaim` | `IPAddressClaim` | namespaced | "give me one" — the whole tenant-facing API |
 
@@ -76,6 +76,9 @@ core controller as follows:
    reconciles live Service assignments against the ledger and sets the
    `Conflict` phase when an address is held by a Service its binding does not
    authorize, and `Lost` when the backing allocation disappears.
+   A Service consuming a claim carries its class's `spec.loadBalancerClass`
+   (none when the class leaves it unset), so it reaches the load-balancer
+   implementation that owns the class's pool. The field is immutable.
 
 ## Auto-claim for LoadBalancer Services
 
@@ -96,9 +99,12 @@ nothing:
   owner. To keep the address, remove the claim's owner reference; it is an
   ordinary claim from then on.
 - Skipped: Services that already name a claim, set
-  `local.sdn.cozystack.io/auto-claim: "false"`, set
-  `spec.loadBalancerClass` or `spec.loadBalancerIP`, carry a MetalLB pool,
-  pin or sharing annotation, or already have an address.
+  `local.sdn.cozystack.io/auto-claim: "false"`, set `spec.loadBalancerIP`,
+  carry a MetalLB pool, pin or sharing annotation, or already have an
+  address, and Services whose `spec.loadBalancerClass` differs from the
+  class's (both unset counts as a match). A Service that names its class
+  with the annotation gets a warning event for a mismatch or a missing
+  class.
 
 Apart from auto-claim, the core controller never touches Services. It
 never parses class parameters and never puts a packet on a wire.

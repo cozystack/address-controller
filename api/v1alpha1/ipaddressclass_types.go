@@ -38,6 +38,7 @@ const (
 )
 
 // IPAddressClassSpec defines the desired state of IPAddressClass.
+// +kubebuilder:validation:XValidation:rule="has(self.loadBalancerClass) == has(oldSelf.loadBalancerClass) && (!has(self.loadBalancerClass) || self.loadBalancerClass == oldSelf.loadBalancerClass)",message="loadBalancerClass is immutable",fieldPath=".loadBalancerClass"
 type IPAddressClassSpec struct {
 	// provisioner names the per-class driver that fulfils claims of this
 	// class, exactly as StorageClass.provisioner names a CSI driver. The
@@ -60,6 +61,18 @@ type IPAddressClassSpec struct {
 	// ipaddress.local.sdn.cozystack.io/held: "true" is exempt.
 	// +optional
 	ReleaseDelay *metav1.Duration `json:"releaseDelay,omitempty"`
+
+	// loadBalancerClass is the spec.loadBalancerClass a Service consuming a
+	// claim of this class must carry, so that the Service reaches the
+	// load-balancer implementation that owns this class's pool. Unset means
+	// the cluster's default implementation: such a Service carries no
+	// loadBalancerClass. The core controller never sets it on a Service.
+	// Immutable, including setting or unsetting it after creation: a
+	// Service's own loadBalancerClass cannot change once set, so a new value
+	// would strand every Service already rendered for the class.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	LoadBalancerClass *string `json:"loadBalancerClass,omitempty"`
 
 	// parameters is an opaque, driver-specific configuration blob (for
 	// example the address ranges to carve from). The core controller never
