@@ -47,13 +47,6 @@ StorageClass names a CSI driver.
   provisioned `IPAddress`, where it takes effect. What each policy
   actually reclaims — the API object, the ledger entry, backend state —
   is spelled out in §6.
-- `spec.loadBalancerClass` (immutable, including setting or unsetting it)
-  — the `spec.loadBalancerClass` a Service consuming a claim of this class
-  must carry, so the Service reaches the load-balancer implementation that
-  owns the class's pool. Unset means the cluster's default implementation,
-  and the Service carries none. Immutable because a Service's own
-  `loadBalancerClass` cannot change once set: a new value would strand
-  every Service already rendered for the class.
 - `spec.parameters` — an opaque object (unknown fields preserved), never
   read by the core. Shape is defined by the driver.
 - The annotation `ipaddressclass.local.sdn.cozystack.io/is-default-class:
@@ -61,6 +54,21 @@ StorageClass names a CSI driver.
 - The annotation `ipaddressclass.local.sdn.cozystack.io/is-auto-claim-class:
   "true"` marks the class auto-claims draw from (§10). Independent of the
   default class; at most one class may carry it.
+- `status` is written by the provisioner that serves the class, never by
+  the core:
+  - `status.loadBalancerClass` — the `spec.loadBalancerClass` a Service
+    consuming a claim of this class must carry, so the Service reaches the
+    load-balancer implementation the provisioner fronts. Empty means the
+    cluster's default implementation, and the Service carries none. The
+    value belongs to the provisioner's deployment, not to the class, so
+    the admin does not restate it per class.
+  - The `Accepted` condition — `True` once the provisioner serves the
+    class, with `observedGeneration` set. `status.loadBalancerClass` is
+    meaningful only while it is `True` for the class's current generation;
+    before that, an empty value is unreported rather than the default. A
+    consumer that creates a Service for a claim of the class waits for it,
+    because a Service's `loadBalancerClass` cannot change after creation.
+    `IPAddressClass.AcceptedLoadBalancerClass()` applies this rule.
 
 ### IPAddress
 
@@ -418,15 +426,20 @@ integration. Its obligations:
    Service's *own* namespace — cross-namespace sharing is not a thing),
    translate it into the backend's pin mechanism, maintain
    `status.associatedTo`, and enforce that one claim serves one workload
-   at a time. A Service whose `spec.loadBalancerClass` differs from its
-   claim's class's `spec.loadBalancerClass` reaches another implementation
-   and is not associated. Disassociation must leave the address `Bound` —
-   reserved, inert.
+   at a time. A Service whose `spec.loadBalancerClass` differs from the
+   value the driver reports in its class's `status.loadBalancerClass`
+   reaches another implementation and is not associated. Disassociation
+   must leave the address `Bound` — reserved, inert.
 6. **Detect, and clear, conflicts.** If the backend hands the reserved
    address to a workload the binding does not authorize, set phase
    `Conflict` (and `Lost` if the backing reservation disappears). The
    core will never override these; the driver clears them by setting the
    phase back to a core-owned value once the condition has passed.
+7. **Report the class.** On every class it serves, write
+   `status.loadBalancerClass` (the `loadBalancerClass` of the
+   implementation it fronts, empty for the cluster default) and set the
+   `Accepted` condition with the class's `observedGeneration` (§2).
+   Consumers of the class's claims wait for it before creating a Service.
 
 Static pre-provisioning needs no driver at all: an admin may create
 `Available` addresses by hand and the core matches them (§4 step 7).
@@ -501,13 +514,15 @@ alone; with several, a warning event is recorded on it and nothing is
 claimed. A named class that does not exist is reported the same way, and
 the Service is claimed once the class is created.
 
-The Service's `spec.loadBalancerClass` must equal the class's, both unset
-counting as equal; otherwise the Service reaches another load-balancer
-implementation than the one owning the class's pool, and nothing is
-claimed. The core cannot fix the Service, whose `loadBalancerClass` is
-immutable once set. A mismatch with the marked class is silent, since that
-class simply does not serve the Service; a mismatch with a class the
-Service named is a warning event.
+The class must be accepted by its provisioner (§2); until then nothing is
+claimed, and the class's status update requeues the Service. The Service's
+`spec.loadBalancerClass` must then equal the class's
+`status.loadBalancerClass`, unset matching empty; otherwise the Service
+reaches another load-balancer implementation than the one the provisioner
+fronts, and nothing is claimed. The core cannot fix the Service, whose
+`loadBalancerClass` is immutable once set. For the marked class both cases
+are silent, since that class does not serve the Service; for a class the
+Service named, an unaccepted class and a mismatch are warning events.
 
 The core then creates an `IPAddressClaim` named after the Service, in the
 Service's namespace, with that `className`, the family derived from the

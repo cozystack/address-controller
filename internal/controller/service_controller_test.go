@@ -34,6 +34,7 @@ import (
 )
 
 const (
+	testLBClass     = "example.com/lb"
 	testServiceName = "web-lb"
 	testServiceUID  = "svc-uid-1"
 	serviceKind     = "Service"
@@ -81,8 +82,21 @@ func getAutoClaim(t *testing.T, c client.Client) *localv1alpha1.IPAddressClaim {
 }
 
 func autoClaimClass(name string) *localv1alpha1.IPAddressClass {
-	class := publicClass(map[string]string{localv1alpha1.IsAutoClaimClassAnnotation: localv1alpha1.AnnotationTrue})
+	class := accepted(publicClass(map[string]string{localv1alpha1.IsAutoClaimClassAnnotation: localv1alpha1.AnnotationTrue}), "")
 	class.Name = name
+	return class
+}
+
+// accepted marks a class as accepted by its provisioner for its current
+// generation, reporting lbClass.
+func accepted(class *localv1alpha1.IPAddressClass, lbClass string) *localv1alpha1.IPAddressClass {
+	class.Status.LoadBalancerClass = lbClass
+	class.Status.Conditions = []metav1.Condition{{
+		Type:               localv1alpha1.ConditionAccepted,
+		Status:             metav1.ConditionTrue,
+		Reason:             localv1alpha1.ReasonAccepted,
+		ObservedGeneration: class.Generation,
+	}}
 	return class
 }
 
@@ -180,7 +194,7 @@ func TestAutoClaimWithMultipleMarkedClassesClaimsNothing(t *testing.T) {
 func TestAutoClaimUsesClassNamedByService(t *testing.T) {
 	svc := loadBalancerService()
 	svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: otherClassName}
-	named := publicClass(nil)
+	named := accepted(publicClass(nil), "")
 	named.Name = otherClassName
 	c := testClient(t, autoClaimClass(testClassName), named, svc)
 	reconcileService(t, serviceReconciler(c))
@@ -209,16 +223,53 @@ func TestAutoClaimWaitsForClassNamedByService(t *testing.T) {
 	}
 }
 
+func TestAutoClaimWaitsForAcceptedClass(t *testing.T) {
+	cases := map[string]func(*localv1alpha1.IPAddressClass){
+		"no status": func(c *localv1alpha1.IPAddressClass) { c.Status = localv1alpha1.IPAddressClassStatus{} },
+		"not accepted": func(c *localv1alpha1.IPAddressClass) {
+			c.Status.Conditions[0].Status = metav1.ConditionFalse
+		},
+		"accepted for an older generation": func(c *localv1alpha1.IPAddressClass) {
+			c.Generation = 2
+			c.Status.Conditions[0].ObservedGeneration = 1
+		},
+	}
+	for name, mutate := range cases {
+		for _, named := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, class named by Service %t", name, named), func(t *testing.T) {
+				svc := loadBalancerService()
+				class := autoClaimClass(testClassName)
+				if named {
+					class.Annotations = nil
+					svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: testClassName}
+				}
+				mutate(class)
+				c := testClient(t, class, svc)
+				r := serviceReconciler(c)
+				reconcileService(t, r)
+
+				if claim := getAutoClaim(t, c); claim != nil {
+					t.Error("claim auto-provisioned from a class its provisioner has not accepted")
+				}
+				if got := recorded(r, "Warning "+localv1alpha1.ReasonClassNotAccepted); got != named {
+					t.Errorf("%s event recorded = %t, want %t", localv1alpha1.ReasonClassNotAccepted, got, named)
+				}
+			})
+		}
+	}
+}
+
 func TestAutoClaimMatchesLoadBalancerClass(t *testing.T) {
 	cases := map[string]struct {
-		service, class *string
-		claimed        bool
+		service *string
+		class   string
+		claimed bool
 	}{
-		"both unset":                   {nil, nil, true},
-		"equal":                        {new("example.com/lb"), new("example.com/lb"), true},
-		"class sets one, Service none": {nil, new("example.com/lb"), false},
-		"Service sets one, class none": {new("example.com/lb"), nil, false},
-		"different":                    {new("example.com/other"), new("example.com/lb"), false},
+		"both unset":                      {nil, "", true},
+		"equal":                           {new(testLBClass), testLBClass, true},
+		"class reports one, Service none": {nil, testLBClass, false},
+		"Service sets one, class none":    {new(testLBClass), "", false},
+		"different":                       {new("example.com/other"), testLBClass, false},
 	}
 	for name, tc := range cases {
 		for _, named := range []bool{false, true} {
@@ -230,7 +281,7 @@ func TestAutoClaimMatchesLoadBalancerClass(t *testing.T) {
 					class.Annotations = nil
 					svc.Annotations = map[string]string{localv1alpha1.ServiceClassAnnotation: testClassName}
 				}
-				class.Spec.LoadBalancerClass = tc.class
+				accepted(class, tc.class)
 				c := testClient(t, class, svc)
 				r := serviceReconciler(c)
 				reconcileService(t, r)

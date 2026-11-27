@@ -59,7 +59,7 @@ func testClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	return fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithStatusSubresource(&localv1alpha1.IPAddress{}, &localv1alpha1.IPAddressClaim{}).
+		WithStatusSubresource(&localv1alpha1.IPAddress{}, &localv1alpha1.IPAddressClaim{}, &localv1alpha1.IPAddressClass{}).
 		WithIndex(&localv1alpha1.IPAddress{}, IPAddressClaimRefIndex, claimRefIndex).
 		WithIndex(&localv1alpha1.IPAddress{}, IPAddressClassNameIndex, classNameIndex).
 		WithObjects(objs...).

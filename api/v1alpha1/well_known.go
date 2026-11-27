@@ -89,8 +89,13 @@ const (
 	ConditionClassResolved = "ClassResolved"
 	// ConditionBound reports whether every requested family is bound.
 	ConditionBound = "Bound"
+	// ConditionAccepted, on an IPAddressClass, is set by the provisioner
+	// that serves the class. True means the provisioner serves it and
+	// status.loadBalancerClass holds the value its consumers must carry.
+	ConditionAccepted = "Accepted"
 
 	ReasonResolved               = "Resolved"
+	ReasonAccepted               = "Accepted"
 	ReasonClassNotFound          = "ClassNotFound"
 	ReasonNoDefaultClass         = "NoDefaultClass"
 	ReasonMultipleDefaultClasses = "MultipleDefaultClasses"
@@ -115,4 +120,7 @@ const (
 	// ReasonLoadBalancerClassMismatch is recorded when a Service names a
 	// class whose loadBalancerClass differs from its own.
 	ReasonLoadBalancerClassMismatch = "LoadBalancerClassMismatch"
+	// ReasonClassNotAccepted is recorded when a Service names a class its
+	// provisioner has not accepted yet.
+	ReasonClassNotAccepted = "ClassNotAccepted"
 )

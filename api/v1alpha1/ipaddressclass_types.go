@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -38,7 +39,6 @@ const (
 )
 
 // IPAddressClassSpec defines the desired state of IPAddressClass.
-// +kubebuilder:validation:XValidation:rule="has(self.loadBalancerClass) == has(oldSelf.loadBalancerClass) && (!has(self.loadBalancerClass) || self.loadBalancerClass == oldSelf.loadBalancerClass)",message="loadBalancerClass is immutable",fieldPath=".loadBalancerClass"
 type IPAddressClassSpec struct {
 	// provisioner names the per-class driver that fulfils claims of this
 	// class, exactly as StorageClass.provisioner names a CSI driver. The
@@ -62,18 +62,6 @@ type IPAddressClassSpec struct {
 	// +optional
 	ReleaseDelay *metav1.Duration `json:"releaseDelay,omitempty"`
 
-	// loadBalancerClass is the spec.loadBalancerClass a Service consuming a
-	// claim of this class must carry, so that the Service reaches the
-	// load-balancer implementation that owns this class's pool. Unset means
-	// the cluster's default implementation: such a Service carries no
-	// loadBalancerClass. The core controller never sets it on a Service.
-	// Immutable, including setting or unsetting it after creation: a
-	// Service's own loadBalancerClass cannot change once set, so a new value
-	// would strand every Service already rendered for the class.
-	// +optional
-	// +kubebuilder:validation:MinLength=1
-	LoadBalancerClass *string `json:"loadBalancerClass,omitempty"`
-
 	// parameters is an opaque, driver-specific configuration blob (for
 	// example the address ranges to carve from). The core controller never
 	// interprets it.
@@ -82,10 +70,33 @@ type IPAddressClassSpec struct {
 	Parameters *runtime.RawExtension `json:"parameters,omitempty"`
 }
 
+// IPAddressClassStatus is written by the provisioner that serves the class.
+// The core controller never writes it.
+type IPAddressClassStatus struct {
+	// loadBalancerClass is the spec.loadBalancerClass a Service consuming a
+	// claim of this class must carry, so that the Service reaches the
+	// load-balancer implementation the provisioner fronts. Empty means the
+	// cluster's default implementation, and such a Service carries none. It
+	// is meaningful only while the Accepted condition is True for the
+	// class's current generation: before that, an empty value is not yet
+	// reported rather than the default.
+	// +optional
+	LoadBalancerClass string `json:"loadBalancerClass,omitempty"`
+
+	// conditions holds the provisioner's Accepted condition.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
+// +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Provisioner",type=string,JSONPath=`.spec.provisioner`
 // +kubebuilder:printcolumn:name="ReclaimPolicy",type=string,JSONPath=`.spec.reclaimPolicy`
+// +kubebuilder:printcolumn:name="LoadBalancerClass",type=string,JSONPath=`.status.loadBalancerClass`
+// +kubebuilder:printcolumn:name="Accepted",type=string,JSONPath=`.status.conditions[?(@.type=="Accepted")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // IPAddressClass describes an address source: which pool, which driver.
@@ -96,7 +107,8 @@ type IPAddressClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec IPAddressClassSpec `json:"spec,omitempty"`
+	Spec   IPAddressClassSpec   `json:"spec,omitempty"`
+	Status IPAddressClassStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -110,4 +122,17 @@ type IPAddressClassList struct {
 
 func init() {
 	SchemeBuilder.Register(&IPAddressClass{}, &IPAddressClassList{})
+}
+
+// AcceptedLoadBalancerClass returns the loadBalancerClass the class's
+// provisioner reports, and whether it has reported one: the Accepted
+// condition is True for the class's current generation. A consumer that
+// creates a Service for a claim of the class waits until ok is true, since
+// a Service's loadBalancerClass cannot change after creation.
+func (c *IPAddressClass) AcceptedLoadBalancerClass() (lbClass string, ok bool) {
+	cond := meta.FindStatusCondition(c.Status.Conditions, ConditionAccepted)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.ObservedGeneration != c.Generation {
+		return "", false
+	}
+	return c.Status.LoadBalancerClass, true
 }
