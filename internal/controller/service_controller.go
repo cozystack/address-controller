@@ -71,15 +71,26 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil || class == nil {
 		return ctrl.Result{}, err
 	}
-	if !sameLoadBalancerClass(svc.Spec.LoadBalancerClass, class.Spec.LoadBalancerClass) {
+	named := svc.Annotations[localv1alpha1.ServiceClassAnnotation] != ""
+	lbClass, accepted := class.AcceptedLoadBalancerClass()
+	if !accepted {
+		// Until the provisioner reports its loadBalancerClass, a match
+		// cannot be checked. The class's status update requeues the Service.
+		if named {
+			r.Recorder.Eventf(svc, "Warning", localv1alpha1.ReasonClassNotAccepted,
+				"IPAddressClass %q has not been accepted by its provisioner %q", class.Name, class.Spec.Provisioner)
+		}
+		return ctrl.Result{}, nil
+	}
+	if !sameLoadBalancerClass(svc.Spec.LoadBalancerClass, lbClass) {
 		// The Service reaches another load-balancer implementation than
-		// the one owning the class's pool. Left alone when the class is the
-		// marked one; reported when the Service named it.
-		if svc.Annotations[localv1alpha1.ServiceClassAnnotation] != "" {
+		// the one the class's provisioner fronts. Left alone when the class
+		// is the marked one; reported when the Service named it.
+		if named {
 			r.Recorder.Eventf(svc, "Warning", localv1alpha1.ReasonLoadBalancerClassMismatch,
 				"Service loadBalancerClass %s does not match IPAddressClass %q loadBalancerClass %s",
 				describeLoadBalancerClass(svc.Spec.LoadBalancerClass), class.Name,
-				describeLoadBalancerClass(class.Spec.LoadBalancerClass))
+				describeLoadBalancerClass(classLoadBalancerClass(lbClass)))
 		}
 		return ctrl.Result{}, nil
 	}
@@ -181,13 +192,22 @@ func (r *ServiceReconciler) serviceClass(ctx context.Context, svc *corev1.Servic
 	return class, nil
 }
 
-// sameLoadBalancerClass reports whether two loadBalancerClass values are
-// equal, both unset counting as equal.
-func sameLoadBalancerClass(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
+// sameLoadBalancerClass reports whether a Service's loadBalancerClass equals
+// a class's reported one, an unset Service field matching an empty value.
+func sameLoadBalancerClass(svc *string, class string) bool {
+	if svc == nil {
+		return class == ""
 	}
-	return *a == *b
+	return *svc == class
+}
+
+// classLoadBalancerClass turns a class's reported value into the Service
+// field it stands for: empty is unset.
+func classLoadBalancerClass(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 func describeLoadBalancerClass(v *string) string {

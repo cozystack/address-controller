@@ -122,3 +122,4 @@ still set it, so every release states its schema changes:
 |---|---|
 | v0.1.0 | initial `IPAddress`, `IPAddressClaim`, `IPAddressClass` |
 | v0.2.0 | `IPAddressClass.spec.releaseDelay` added; `IPAddress` gains a core-set `Bound` condition; immutable `IPAddressClass.spec.loadBalancerClass` added |
+| v0.3.0 | `IPAddressClass.spec.loadBalancerClass` removed, and dropped from stored classes; `IPAddressClass` gains a status subresource with the driver-written `status.loadBalancerClass` and `Accepted` condition |

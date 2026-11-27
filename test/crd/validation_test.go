@@ -14,17 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package crd runs the chart's CRD validation rules against a real
-// kube-apiserver (envtest).
+// Package crd runs the chart's CRDs against a real kube-apiserver (envtest).
 package crd
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,13 +31,11 @@ import (
 	localv1alpha1 "github.com/cozystack/address-controller/api/v1alpha1"
 )
 
-// The two classes the update cases patch.
-const (
-	withoutLBClass = "unset"
-	withLBClass    = "set"
-)
-
-func TestIPAddressClassLoadBalancerClass(t *testing.T) {
+// TestIPAddressClassStatusSubresource checks that the provisioner's status
+// survives writes to the class itself: the core controller updates a class to
+// manage its finalizer, and such an update must not reset what the
+// provisioner reported.
+func TestIPAddressClassStatusSubresource(t *testing.T) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS is not set; run through `make test`")
 	}
@@ -61,84 +56,49 @@ func TestIPAddressClassLoadBalancerClass(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	for name, value := range map[string]*string{withoutLBClass: nil, withLBClass: new("example.com/lb")} {
-		if err := c.Create(ctx, class(name, value)); err != nil {
-			t.Fatalf("creating class %s: %v", name, err)
-		}
-	}
-
-	creates := []struct {
-		name    string
-		lbClass *string
-		admit   bool
-	}{
-		{"create without loadBalancerClass", nil, true},
-		{"create with loadBalancerClass", new("example.com/lb"), true},
-		{"create with empty loadBalancerClass", new(""), false},
-	}
-	for _, tc := range creates {
-		t.Run(tc.name, func(t *testing.T) {
-			obj := class("", tc.lbClass)
-			obj.GenerateName = "probe-"
-			check(t, c.Create(ctx, obj, client.DryRunAll), tc.admit)
-		})
-	}
-
-	updates := []struct {
-		name  string
-		class string
-		spec  map[string]any
-		admit bool
-	}{
-		{"set on a class created without it", withoutLBClass, lbClassPatch("example.com/lb"), false},
-		{"other field changed, still unset", withoutLBClass, reclaimDelete, true},
-		{"changed to another value", withLBClass, lbClassPatch("example.com/other"), false},
-		{"removed", withLBClass, lbClassPatch(nil), false},
-		{"rewritten to the same value", withLBClass, lbClassPatch("example.com/lb"), true},
-		{"other field changed, value kept", withLBClass, reclaimDelete, true},
-	}
-	for _, tc := range updates {
-		t.Run(tc.name, func(t *testing.T) {
-			raw, err := json.Marshal(map[string]any{"spec": tc.spec})
-			if err != nil {
-				t.Fatal(err)
-			}
-			obj := &localv1alpha1.IPAddressClass{}
-			if err := c.Get(ctx, types.NamespacedName{Name: tc.class}, obj); err != nil {
-				t.Fatal(err)
-			}
-			check(t, c.Patch(ctx, obj, client.RawPatch(types.MergePatchType, raw), client.DryRunAll), tc.admit)
-		})
-	}
-}
-
-var reclaimDelete = map[string]any{"reclaimPolicy": "Delete"}
-
-// lbClassPatch is a merge patch of spec setting loadBalancerClass, or removing
-// it when value is nil.
-func lbClassPatch(value any) map[string]any {
-	return map[string]any{"loadBalancerClass": value}
-}
-
-func check(t *testing.T, err error, admit bool) {
-	t.Helper()
-	switch {
-	case admit && err != nil:
-		t.Errorf("refused, want admitted: %v", err)
-	case !admit && err == nil:
-		t.Error("admitted, want refused")
-	case !admit && !apierrors.IsInvalid(err):
-		t.Errorf("refused for another reason than validation: %v", err)
-	}
-}
-
-func class(name string, loadBalancerClass *string) *localv1alpha1.IPAddressClass {
-	return &localv1alpha1.IPAddressClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+	class := &localv1alpha1.IPAddressClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "public"},
 		Spec: localv1alpha1.IPAddressClassSpec{
-			Provisioner:       "example.com/driver",
-			ReclaimPolicy:     localv1alpha1.ReclaimRetain,
-			LoadBalancerClass: loadBalancerClass,
+			Provisioner:   "example.com/driver",
+			ReclaimPolicy: localv1alpha1.ReclaimRetain,
 		},
+	}
+	if err := c.Create(ctx, class); err != nil {
+		t.Fatalf("creating class: %v", err)
+	}
+	class.Status = localv1alpha1.IPAddressClassStatus{
+		LoadBalancerClass: "example.com/lb",
+		Conditions: []metav1.Condition{{
+			Type:               localv1alpha1.ConditionAccepted,
+			Status:             metav1.ConditionTrue,
+			Reason:             localv1alpha1.ReasonAccepted,
+			ObservedGeneration: class.Generation,
+			LastTransitionTime: metav1.Now(),
+		}},
+	}
+	if err := c.Status().Update(ctx, class); err != nil {
+		t.Fatalf("writing status: %v", err)
+	}
+
+	class.Finalizers = []string{"example.com/finalizer"}
+	class.Status = localv1alpha1.IPAddressClassStatus{}
+	if err := c.Update(ctx, class); err != nil {
+		t.Fatalf("updating class: %v", err)
+	}
+
+	got := &localv1alpha1.IPAddressClass{}
+	if err := c.Get(ctx, types.NamespacedName{Name: class.Name}, got); err != nil {
+		t.Fatal(err)
+	}
+	lbClass, ok := got.AcceptedLoadBalancerClass()
+	if !ok || lbClass != "example.com/lb" {
+		t.Errorf("after an update of the class, AcceptedLoadBalancerClass() = %q, %t; want %q, true",
+			lbClass, ok, "example.com/lb")
+	}
+
+	// Clear the finalizer so the environment can stop cleanly.
+	got.Finalizers = nil
+	if err := c.Update(ctx, got); err != nil {
+		t.Fatal(err)
 	}
 }
